@@ -5,6 +5,7 @@ import {
 } from "./ledger-key.js";
 import type { ToolkitConfig } from "./config.js";
 import { xdr } from "@stellar/stellar-sdk";
+import { errorMessage, ToolkitError } from "./errors.js";
 
 const MAX_STORAGE_KEYS = 200;
 const MAX_REQUEST_BYTES = 1_000_000;
@@ -52,6 +53,21 @@ export interface RpcSnapshot {
   entries: InspectedEntry[];
 }
 
+export function requireLiveUntilLedgerSeq(
+  entry: Pick<InspectedEntry, "key" | "found" | "liveUntilLedgerSeq">,
+): number {
+  if (entry.liveUntilLedgerSeq === null) {
+    const reason = entry.found
+      ? "expiration metadata was not returned by the RPC provider"
+      : "the ledger entry was not found";
+    throw new ToolkitError(
+      "TTL_METADATA_UNAVAILABLE",
+      `Expiration ledger is unavailable for key ${entry.key}: ${reason}`,
+    );
+  }
+  return entry.liveUntilLedgerSeq;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -78,11 +94,28 @@ export class SorobanRpcClient {
   ) {}
 
   async inspect(keys: string[]): Promise<RpcSnapshot> {
+    try {
+      return await this.inspectUnchecked(keys);
+    } catch (error) {
+      if (error instanceof ToolkitError) {
+        throw error;
+      }
+      throw new ToolkitError("RPC_RESPONSE", errorMessage(error), {
+        cause: error,
+      });
+    }
+  }
+
+  private async inspectUnchecked(keys: string[]): Promise<RpcSnapshot> {
     if (keys.length === 0) {
-      throw new Error("Provide at least one ledger key");
+      throw new ToolkitError(
+        "INVALID_INPUT",
+        "Provide at least one ledger key",
+      );
     }
     if (keys.length > MAX_STORAGE_KEYS) {
-      throw new Error(
+      throw new ToolkitError(
+        "INVALID_INPUT",
         `At most ${MAX_STORAGE_KEYS} storage keys can be inspected per request`,
       );
     }
@@ -92,7 +125,8 @@ export class SorobanRpcClient {
       0,
     );
     if (requestBytes > MAX_REQUEST_BYTES) {
-      throw new Error(
+      throw new ToolkitError(
+        "INVALID_INPUT",
         "Combined ledger key request exceeds the 1 MB safety limit",
       );
     }
@@ -100,7 +134,10 @@ export class SorobanRpcClient {
     const uniqueStorageKeys = new Set<string>();
     for (const parsed of parsedKeys) {
       if (uniqueStorageKeys.has(parsed.xdr)) {
-        throw new Error(`Duplicate ledger key: ${parsed.xdr}`);
+        throw new ToolkitError(
+          "INVALID_INPUT",
+          `Duplicate ledger key: ${parsed.xdr}`,
+        );
       }
       uniqueStorageKeys.add(parsed.xdr);
       requested.add(parsed.xdr);
@@ -110,7 +147,10 @@ export class SorobanRpcClient {
     const snapshot = await this.getLedgerEntries([...requested]);
     for (const returnedKey of snapshot.entries.keys()) {
       if (!requested.has(returnedKey)) {
-        throw new Error("RPC returned a ledger entry that was not requested");
+        throw new ToolkitError(
+          "RPC_RESPONSE",
+          "RPC returned a ledger entry that was not requested",
+        );
       }
     }
 
@@ -120,7 +160,8 @@ export class SorobanRpcClient {
         const storageEntry = decodeLedgerEntryData(storage.xdr);
         const actualKey = ledgerKeyFromEntryData(storageEntry);
         if (actualKey !== parsed.xdr) {
-          throw new Error(
+          throw new ToolkitError(
+            "RPC_RESPONSE",
             `RPC returned ledger data that does not match requested key ${parsed.xdr}`,
           );
         }
@@ -160,7 +201,8 @@ export class SorobanRpcClient {
       expectedPassphrase !== undefined &&
       result.passphrase !== expectedPassphrase
     ) {
-      throw new Error(
+      throw new ToolkitError(
+        "NETWORK_MISMATCH",
         `RPC network passphrase does not match the configured expectation for "${this.config.network}"`,
       );
     }
@@ -237,7 +279,8 @@ export class SorobanRpcClient {
           await this.delay(RETRY_DELAYS_MS[attempt]!);
           continue;
         }
-        throw new Error(
+        throw new ToolkitError(
+          "RPC_TRANSPORT",
           `Soroban RPC request failed after ${MAX_RPC_ATTEMPTS} attempts; check the endpoint, connectivity, or ${REQUEST_TIMEOUT_MS} ms timeout`,
           { cause: error },
         );
@@ -251,11 +294,17 @@ export class SorobanRpcClient {
           await this.delay(this.retryDelay(response, attempt));
           continue;
         }
-        throw new Error(`Soroban RPC returned HTTP ${response.status}`);
+        throw new ToolkitError(
+          "RPC_HTTP",
+          `Soroban RPC returned HTTP ${response.status}`,
+        );
       }
       return this.parseResponse(response);
     }
-    throw new Error("Soroban RPC request failed after exhausting retries");
+    throw new ToolkitError(
+      "RPC_TRANSPORT",
+      "Soroban RPC request failed after exhausting retries",
+    );
   }
 
   private retryDelay(response: Response, attempt: number): number {
@@ -335,7 +384,7 @@ export class SorobanRpcClient {
         typeof payload.error.message === "string"
           ? payload.error.message
           : "unknown RPC error";
-      throw new Error(`Soroban RPC error: ${message}`);
+      throw new ToolkitError("RPC_ERROR", `Soroban RPC error: ${message}`);
     }
     if (!("result" in payload)) {
       throw new Error("Soroban RPC response did not contain a result");

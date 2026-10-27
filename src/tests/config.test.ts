@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveConfig } from "../config.js";
+import { ToolkitError } from "../errors.js";
 
 test("resolves the selected network and its default RPC endpoint", async () => {
   const config = await resolveConfig({ network: "testnet" });
@@ -31,7 +32,20 @@ test("requires a secure endpoint for a custom network", async () => {
     network: "custom",
     rpcUrl: "http://localhost:8000/",
   });
+
   assert.equal(local.rpcUrl, "http://localhost:8000");
+});
+
+test("classifies configuration failures with a stable SDK error code", async () => {
+  await assert.rejects(
+    resolveConfig({ network: "custom" }),
+    (error: unknown) => {
+      assert.ok(error instanceof ToolkitError);
+      assert.equal(error.code, "CONFIGURATION");
+      assert.match(error.message, /requires an RPC URL/);
+      return true;
+    },
+  );
 });
 
 test("rejects inverted risk thresholds", async () => {

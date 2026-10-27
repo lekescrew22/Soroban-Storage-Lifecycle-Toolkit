@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { xdr } from "@stellar/stellar-sdk";
+import { errorMessage, isToolkitError, ToolkitError } from "./errors.js";
 
 export interface ParsedStorageKey {
   xdr: string;
@@ -21,7 +22,7 @@ function decodeBase64(value: string, description: string): Buffer {
   return bytes;
 }
 
-export function parseStorageKey(encoded: string): ParsedStorageKey {
+function parseStorageKeyUnchecked(encoded: string): ParsedStorageKey {
   const bytes = decodeBase64(encoded, "Ledger key");
   if (bytes.length > 64 * 1024) {
     throw new Error("Ledger key XDR exceeds the 64 KiB safety limit");
@@ -53,6 +54,19 @@ export function parseStorageKey(encoded: string): ParsedStorageKey {
       key.type === "contractData" ? key.contractData.durability.name : null,
     ttlKeyXdr: ttlKey.toXDR("base64"),
   };
+}
+
+export function parseStorageKey(encoded: string): ParsedStorageKey {
+  try {
+    return parseStorageKeyUnchecked(encoded);
+  } catch (error) {
+    if (isToolkitError(error)) {
+      throw error;
+    }
+    throw new ToolkitError("INVALID_INPUT", errorMessage(error), {
+      cause: error,
+    });
+  }
 }
 
 export function decodeLedgerEntryData(encoded: string): xdr.LedgerEntryData {
