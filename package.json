@@ -1,0 +1,47 @@
+{
+  "name": "soroban-storage-lifecycle-toolkit",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Inspect known Soroban ledger entries and plan TTL maintenance.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/proverbs31ziggo-a11y/Soroban-Storage-Lifecycle-Toolkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/proverbs31ziggo-a11y/Soroban-Storage-Lifecycle-Toolkit/issues"
+  },
+  "homepage": "https://github.com/proverbs31ziggo-a11y/Soroban-Storage-Lifecycle-Toolkit#readme",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": "./dist/index.js",
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "examples",
+    "config.example.json"
+  ],
+  "bin": {
+    "soroban-storage": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/mark-bin-executable.mjs",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build && node --test dist/tests/config.test.js dist/tests/ledger-key.test.js dist/tests/maintenance-planner.test.js dist/tests/rpc-client.test.js dist/tests/cli.test.js",
+    "test:integration": "npm run build && node --test dist/tests/integration.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^17.4.0",
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.8.3"
+  }
+}
