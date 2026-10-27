@@ -6,7 +6,13 @@ import type {
 export type OutputFormat = "table" | "json" | "csv";
 
 function csvCell(value: unknown): string {
-  const text = value === null || value === undefined ? "" : String(value);
+  let text = value === null || value === undefined ? "" : String(value);
+  if (
+    typeof value === "string" &&
+    /^[\s\u0000-\u001f\ufeff]*[=+\-@]/u.test(value)
+  ) {
+    text = `'${text}`;
+  }
   return `"${text.replaceAll('"', '""')}"`;
 }
 

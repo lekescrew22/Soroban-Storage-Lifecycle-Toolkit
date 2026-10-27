@@ -62,7 +62,7 @@ For custom endpoints, set `networkPassphrase` in the config or pass `--network-p
 
 For RPC providers requiring bearer authentication, set `STELLAR_RPC_AUTH_TOKEN` in the environment. The token is sent in the Authorization header and is never included in the report. Avoid putting credentials in endpoint URLs or committed config files.
 
-The CLI accepts up to 200 unique contract data/code keys per call. Reports include the verified network passphrase, snapshot ledger, ledger-time assumption, entry modification ledger, TTL expiration ledger when supplied by RPC, estimated remaining ledgers/days, risk, and the known-key limitation. Output formats are `table`, `json`, and `csv`.
+The CLI accepts up to 200 unique contract data/code keys per call. Reports include the verified network passphrase, snapshot ledger, ledger-time assumption, entry modification ledger, TTL expiration ledger when supplied by RPC, estimated remaining ledgers/days, risk, and the known-key limitation. Output formats are `table`, `json`, and `csv`. CSV text cells beginning with spreadsheet formula markers (`=`, `+`, `-`, or `@`, including after leading whitespace/control characters) are prefixed with an apostrophe to reduce formula-injection risk; numeric report values remain numeric.
 
 ## Extension-cost estimate
 
