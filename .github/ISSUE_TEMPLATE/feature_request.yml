@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a focused improvement to the toolkit.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The MVP inspects known keys and creates dry-run plans. It does not discover every key or sign/submit transactions.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the developer workflow or limitation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe an observable result, not only an implementation preference.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List a few testable conditions for completion.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This request does not assume automatic discovery of all contract storage keys.
+          required: true
+        - label: If transaction execution is involved, this request is limited to safeguards or a dry-run unless explicitly reviewed.
+          required: true

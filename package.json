@@ -1,6 +1,7 @@
 {
   "name": "soroban-storage-lifecycle-toolkit",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "Inspect known Soroban ledger entries and plan TTL maintenance.",
   "repository": {

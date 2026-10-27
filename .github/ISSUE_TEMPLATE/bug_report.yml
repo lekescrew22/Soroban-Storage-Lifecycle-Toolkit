@@ -1,0 +1,46 @@
+name: Bug report
+description: Report incorrect behavior in storage inspection or TTL planning.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include RPC tokens, private keys, or other credentials. This toolkit only inspects explicitly supplied ledger keys.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Toolkit and Node.js versions
+      placeholder: "Toolkit 0.1.0; Node.js 22.x"
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      options:
+        - Testnet
+        - Mainnet
+        - Futurenet
+        - Custom/local
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include safe, reproducible steps. Redact URLs containing credentials and sensitive key data.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Remove secrets and provider-specific private information before posting.

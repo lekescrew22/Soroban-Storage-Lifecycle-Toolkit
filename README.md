@@ -1,5 +1,8 @@
 # Soroban Storage Lifecycle Toolkit
 
+[![CI](https://github.com/proverbs31ziggo-a11y/Soroban-Storage-Lifecycle-Toolkit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/proverbs31ziggo-a11y/Soroban-Storage-Lifecycle-Toolkit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A TypeScript SDK and CLI for inspecting **known** Soroban ledger keys, checking their TTL risk, and producing dry-run maintenance plans.
 
 ## Important limitation
