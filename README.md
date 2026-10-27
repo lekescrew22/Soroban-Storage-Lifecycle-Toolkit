@@ -92,6 +92,10 @@ ledger-entry data XDR byte length × added TTL ledgers × configured stroops per
 
 This is a user-supplied planning approximation, not the protocol's authoritative rent calculation. The report states the assumption; actual cost depends on current network configuration and transaction simulation. No transaction is generated or submitted.
 
+## JSON report schema
+
+The versioned [JSON Schema for report version 1](schemas/report-v1.schema.json) describes both inspection reports and dry-run plans. JSON consumers should check `schemaVersion` before processing reports. Additive optional entry metadata may be introduced without changing the schema version; changes to required fields, field meaning, or enum values require a new schema version. `remainingDays` is an estimate based on `ledgerCloseSeconds`; `estimatedCostStroops` and `estimatedTotalStroops` are optional illustrative estimates, not quotes.
+
 ## SDK
 
 ```ts
