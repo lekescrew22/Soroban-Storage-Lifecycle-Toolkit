@@ -20,5 +20,8 @@ export type {
 } from "./maintenance-planner.js";
 export { formatReport } from "./report.js";
 export type { OutputFormat } from "./report.js";
-export { isToolkitError, ToolkitError } from "./errors.js";
-export type { ToolkitErrorCode } from "./errors.js";
+export { parseStorageKeyManifest } from "./manifest.js";
+export type {
+  StorageKeyManifest,
+  StorageKeyManifestEntry,
+} from "./manifest.js";
