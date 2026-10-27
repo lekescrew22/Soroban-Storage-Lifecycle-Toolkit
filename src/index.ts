@@ -20,3 +20,8 @@ export type {
 } from "./maintenance-planner.js";
 export { formatReport } from "./report.js";
 export type { OutputFormat } from "./report.js";
+export { parseStorageKeyManifest } from "./manifest.js";
+export type {
+  StorageKeyManifest,
+  StorageKeyManifestEntry,
+} from "./manifest.js";

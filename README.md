@@ -33,6 +33,24 @@ node examples/contract-data-key.mjs <CONTRACT_ID> COUNTER persistent
 
 Copy the printed base64 XDR into `--key`, or put one key per line in a keys file. Blank lines and lines beginning with `#` are ignored.
 
+For reviewable key inventories, use a versioned JSON manifest:
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "name": "counter",
+      "key": "<BASE64_LEDGER_KEY_XDR>",
+      "owner": "payments team",
+      "notes": "Persistent contract counter"
+    }
+  ]
+}
+```
+
+Run either command with `--manifest ./storage-keys.json` in place of `--key` or `--keys-file`. A manifest may contain up to 200 unique names and keys; it does not discover keys or imply complete contract-storage coverage. Manifest metadata is included with its matching entry in reports.
+
 ## CLI
 
 ```sh
@@ -73,6 +91,10 @@ ledger-entry data XDR byte length × added TTL ledgers × configured stroops per
 ```
 
 This is a user-supplied planning approximation, not the protocol's authoritative rent calculation. The report states the assumption; actual cost depends on current network configuration and transaction simulation. No transaction is generated or submitted.
+
+## JSON report schema
+
+The versioned [JSON Schema for report version 1](schemas/report-v1.schema.json) describes both inspection reports and dry-run plans. JSON consumers should check `schemaVersion` before processing reports. Additive optional entry metadata may be introduced without changing the schema version; changes to required fields, field meaning, or enum values require a new schema version. `remainingDays` is an estimate based on `ledgerCloseSeconds`; `estimatedCostStroops` and `estimatedTotalStroops` are optional illustrative estimates, not quotes.
 
 ## SDK
 

@@ -18,6 +18,7 @@
   "files": [
     "dist/*.js",
     "dist/*.d.ts",
+    "schemas",
     "examples",
     "config.example.json"
   ],
@@ -30,7 +31,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "npm run build && node --test dist/tests/config.test.js dist/tests/ledger-key.test.js dist/tests/maintenance-planner.test.js dist/tests/report.test.js dist/tests/rpc-client.test.js dist/tests/cli.test.js",
+    "test": "npm run build && node --test dist/tests/config.test.js dist/tests/ledger-key.test.js dist/tests/manifest.test.js dist/tests/maintenance-planner.test.js dist/tests/rpc-client.test.js dist/tests/cli.test.js",
     "test:integration": "npm run build && node --test dist/tests/integration.test.js"
   },
   "engines": {
@@ -42,6 +43,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "ajv": "^8.20.0",
     "prettier": "^3.9.10",
     "typescript": "^5.8.3"
   }

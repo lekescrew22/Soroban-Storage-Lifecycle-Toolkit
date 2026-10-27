@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/proverbs31ziggo-a11y/Soroban-Storage-Lifecycle-Toolkit/blob/main/schemas/report-v1.schema.json",
+  "title": "Soroban Storage Toolkit report, schema version 1",
+  "description": "Inspection reports and dry-run plans emitted by the Soroban Storage Lifecycle Toolkit.",
+  "oneOf": [
+    { "$ref": "#/$defs/inspectionReport" },
+    { "$ref": "#/$defs/maintenancePlan" }
+  ],
+  "$defs": {
+    "risk": {
+      "type": "string",
+      "enum": ["critical", "warning", "healthy", "unknown"]
+    },
+    "entry": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "notes": { "type": "string", "minLength": 1 },
+        "keyType": {
+          "type": "string",
+          "enum": ["contractData", "contractCode"]
+        },
+        "durability": {
+          "oneOf": [
+            { "type": "string", "enum": ["temporary", "persistent"] },
+            { "type": "null" }
+          ]
+        },
+        "ttlKey": { "type": "string", "minLength": 1 },
+        "found": { "type": "boolean" },
+        "lastModifiedLedgerSeq": {
+          "oneOf": [{ "$ref": "#/$defs/uint32" }, { "type": "null" }]
+        },
+        "liveUntilLedgerSeq": {
+          "oneOf": [{ "$ref": "#/$defs/uint32" }, { "type": "null" }]
+        },
+        "entryBytes": {
+          "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }]
+        },
+        "risk": { "$ref": "#/$defs/risk" },
+        "remainingLedgers": {
+          "oneOf": [{ "type": "integer" }, { "type": "null" }]
+        },
+        "remainingDays": {
+          "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }]
+        }
+      },
+      "required": [
+        "key",
+        "keyType",
+        "durability",
+        "ttlKey",
+        "found",
+        "lastModifiedLedgerSeq",
+        "liveUntilLedgerSeq",
+        "entryBytes",
+        "risk",
+        "remainingLedgers",
+        "remainingDays"
+      ]
+    },
+    "uint32": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "baseReport": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "network": { "type": "string", "minLength": 1 },
+        "networkPassphrase": { "type": "string", "minLength": 1 },
+        "latestLedger": { "$ref": "#/$defs/uint32" },
+        "ledgerCloseSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "thresholds": {
+          "type": "object",
+          "properties": {
+            "criticalDays": { "type": "number", "exclusiveMinimum": 0 },
+            "warningDays": { "type": "number", "exclusiveMinimum": 0 }
+          },
+          "required": ["criticalDays", "warningDays"],
+          "additionalProperties": false
+        },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+        "limitations": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": [
+        "schemaVersion",
+        "network",
+        "networkPassphrase",
+        "latestLedger",
+        "ledgerCloseSeconds",
+        "thresholds",
+        "entries",
+        "limitations"
+      ]
+    },
+    "planAction": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "ttlKey": { "type": "string", "minLength": 1 },
+        "action": {
+          "type": "string",
+          "enum": ["extend", "no-op", "unavailable"]
+        },
+        "currentLiveUntilLedgerSeq": {
+          "oneOf": [{ "$ref": "#/$defs/uint32" }, { "type": "null" }]
+        },
+        "targetLiveUntilLedgerSeq": { "$ref": "#/$defs/uint32" },
+        "estimatedCostStroops": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]+$" },
+            { "type": "null" }
+          ]
+        },
+        "reason": { "type": "string" }
+      },
+      "required": [
+        "key",
+        "ttlKey",
+        "action",
+        "currentLiveUntilLedgerSeq",
+        "targetLiveUntilLedgerSeq",
+        "estimatedCostStroops"
+      ],
+      "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "properties": {
+        "mode": { "const": "dry-run" },
+        "targetDays": { "type": "number", "exclusiveMinimum": 0 },
+        "targetLedger": { "$ref": "#/$defs/uint32" },
+        "estimatedTotalStroops": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]+$" },
+            { "type": "null" }
+          ]
+        },
+        "assumptions": { "type": "array", "items": { "type": "string" } },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/planAction" }
+        }
+      },
+      "required": [
+        "mode",
+        "targetDays",
+        "targetLedger",
+        "estimatedTotalStroops",
+        "assumptions",
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    "inspectionReport": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/baseReport" },
+        { "not": { "type": "object", "required": ["plan"] } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "maintenancePlan": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/baseReport" },
+        {
+          "type": "object",
+          "properties": { "plan": { "$ref": "#/$defs/plan" } },
+          "required": ["plan"]
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

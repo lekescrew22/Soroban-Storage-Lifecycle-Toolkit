@@ -27,6 +27,9 @@ function formatCsv(report: InspectionReport | MaintenancePlan): string {
     "criticalDays",
     "warningDays",
     "key",
+    "name",
+    "owner",
+    "notes",
     "keyType",
     "durability",
     "found",
@@ -60,6 +63,9 @@ function formatCsv(report: InspectionReport | MaintenancePlan): string {
       report.thresholds.criticalDays,
       report.thresholds.warningDays,
       entry.key,
+      entry.name,
+      entry.owner,
+      entry.notes,
       entry.keyType,
       entry.durability,
       entry.found,
@@ -90,13 +96,14 @@ function formatTable(report: InspectionReport | MaintenancePlan): string {
   const plan = "plan" in report ? report.plan : undefined;
   const lines = [
     `Network: ${report.network} (${report.networkPassphrase}) | Snapshot ledger: ${report.latestLedger} | Ledger interval: ${report.ledgerCloseSeconds}s`,
-    "KEY TYPE | DURABILITY | FOUND | LAST MODIFIED | LIVE UNTIL | DAYS LEFT | RISK" +
+    "NAME | KEY TYPE | DURABILITY | FOUND | LAST MODIFIED | LIVE UNTIL | DAYS LEFT | RISK" +
       (plan ? " | ACTION | EST. STROOPS" : ""),
   ];
   for (const entry of report.entries) {
     const action = plan?.actions.find((item) => item.key === entry.key);
     lines.push(
       [
+        entry.name ?? "",
         entry.keyType,
         entry.durability ?? "n/a",
         entry.found ? "yes" : "no",
@@ -115,6 +122,9 @@ function formatTable(report: InspectionReport | MaintenancePlan): string {
       ].join(" | "),
     );
     lines.push(`  Key: ${entry.key}`);
+    if (entry.name) {
+      lines.push(`  Name: ${entry.name}`);
+    }
   }
   if (plan) {
     lines.push(
