@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { Address, xdr } from "@stellar/stellar-sdk";
 import { ledgerKeyFromEntryData, parseStorageKey } from "../ledger-key.js";
+import { ToolkitError } from "../errors.js";
 
 test("validates Soroban ledger keys and derives the TTL key from the key hash", () => {
   const ledgerKey = xdr.LedgerKey.contractCode(
@@ -32,6 +33,15 @@ test("rejects malformed, non-canonical, and non-Soroban ledger keys", () => {
     () => parseStorageKey(accountKey.toXDR("base64")),
     /only Soroban/,
   );
+});
+
+test("classifies invalid ledger-key input with a stable SDK error code", () => {
+  assert.throws(parseStorageKey.bind(null, "%%%"), (error: unknown) => {
+    assert.ok(error instanceof ToolkitError);
+    assert.equal(error.code, "INVALID_INPUT");
+    assert.match(error.message, /base64-encoded XDR/);
+    return true;
+  });
 });
 
 test("reconstructs the exact contract-data key from RPC entry data", () => {

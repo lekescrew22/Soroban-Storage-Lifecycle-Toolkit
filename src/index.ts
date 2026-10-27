@@ -8,7 +8,7 @@ export {
 export type { ParsedStorageKey } from "./ledger-key.js";
 export { assessRisk } from "./risk.js";
 export type { RiskAssessment, RiskLevel } from "./risk.js";
-export { SorobanRpcClient } from "./rpc-client.js";
+export { requireLiveUntilLedgerSeq, SorobanRpcClient } from "./rpc-client.js";
 export type { InspectedEntry, RpcSnapshot } from "./rpc-client.js";
 export {
   createInspectionReport,
@@ -20,3 +20,5 @@ export type {
 } from "./maintenance-planner.js";
 export { formatReport } from "./report.js";
 export type { OutputFormat } from "./report.js";
+export { isToolkitError, ToolkitError } from "./errors.js";
+export type { ToolkitErrorCode } from "./errors.js";

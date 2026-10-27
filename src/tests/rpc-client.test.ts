@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { xdr } from "@stellar/stellar-sdk";
+import { ToolkitError } from "../errors.js";
 import type { ToolkitConfig } from "../config.js";
 import { parseStorageKey } from "../ledger-key.js";
-import { SorobanRpcClient } from "../rpc-client.js";
+import { requireLiveUntilLedgerSeq, SorobanRpcClient } from "../rpc-client.js";
 
 const config: ToolkitConfig = {
   network: "testnet",
@@ -199,9 +200,84 @@ test("refuses an RPC endpoint on the wrong named network", async () => {
 
   await assert.rejects(
     new SorobanRpcClient(config, fetchStub).inspect([key]),
-    /does not match the configured expectation for "testnet"/,
+    (error: unknown) => {
+      assert.ok(error instanceof ToolkitError);
+      assert.equal(error.code, "NETWORK_MISMATCH");
+      assert.match(
+        error.message,
+        /does not match the configured expectation for "testnet"/,
+      );
+      return true;
+    },
   );
   assert.equal(ledgerRequestMade, false);
+});
+
+test("classifies transport and malformed RPC failures without leaking endpoint query values", async () => {
+  const key = xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 13) }),
+  ).toXDR("base64");
+  const privateUrlConfig = {
+    ...config,
+    rpcUrl: "https://rpc.example.test/v1?api-key=private",
+  };
+  const failingFetch: typeof fetch = async () => {
+    throw new Error("transport failed for private endpoint");
+  };
+  await assert.rejects(
+    new SorobanRpcClient(privateUrlConfig, failingFetch).inspect([key]),
+    (error: unknown) => {
+      assert.ok(error instanceof ToolkitError);
+      assert.equal(error.code, "RPC_TRANSPORT");
+      assert.doesNotMatch(error.message, /private|api-key/);
+      assert.ok(error.cause instanceof Error);
+      return true;
+    },
+  );
+
+  const malformedFetch: typeof fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as RpcRequest;
+    if (request.method === "getNetwork") {
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+          passphrase: "Test SDF Network ; September 2015",
+          protocolVersion: 29,
+        },
+      });
+    }
+    return Response.json({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: { latestLedger: "invalid", entries: [] },
+    });
+  };
+  await assert.rejects(
+    new SorobanRpcClient(config, malformedFetch).inspect([key]),
+    (error: unknown) => {
+      assert.ok(error instanceof ToolkitError);
+      assert.equal(error.code, "RPC_RESPONSE");
+      return true;
+    },
+  );
+});
+
+test("classifies missing expiration metadata for strict SDK consumers", () => {
+  assert.throws(
+    () =>
+      requireLiveUntilLedgerSeq({
+        key: "known-key",
+        found: true,
+        liveUntilLedgerSeq: null,
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof ToolkitError);
+      assert.equal(error.code, "TTL_METADATA_UNAVAILABLE");
+      assert.match(error.message, /not returned by the RPC provider/);
+      return true;
+    },
+  );
 });
 
 test("retries transient RPC failures without retrying successful requests", async () => {

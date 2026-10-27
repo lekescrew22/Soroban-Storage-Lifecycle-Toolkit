@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { errorMessage, isToolkitError, ToolkitError } from "./errors.js";
 
 export type Network = "testnet" | "mainnet" | "futurenet" | "custom";
 
@@ -152,7 +153,7 @@ function validateRpcUrl(value: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
-export async function resolveConfig(
+async function resolveConfigUnchecked(
   overrides: ConfigOverrides,
 ): Promise<ToolkitConfig> {
   let fileConfig: Partial<ToolkitConfig> = {};
@@ -165,6 +166,7 @@ export async function resolveConfig(
         `Unable to read config file "${overrides.configPath}": ${String(error)}`,
       );
     }
+
     try {
       fileConfig = parseConfigFile(JSON.parse(content) as unknown);
     } catch (error) {
@@ -252,4 +254,19 @@ export async function resolveConfig(
     ledgerCloseSeconds,
     ...(rentFeePerByteLedger === undefined ? {} : { rentFeePerByteLedger }),
   };
+}
+
+export async function resolveConfig(
+  overrides: ConfigOverrides,
+): Promise<ToolkitConfig> {
+  try {
+    return await resolveConfigUnchecked(overrides);
+  } catch (error) {
+    if (isToolkitError(error)) {
+      throw error;
+    }
+    throw new ToolkitError("CONFIGURATION", errorMessage(error), {
+      cause: error,
+    });
+  }
 }
