@@ -136,3 +136,6 @@ npm run test:integration
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidance.
+
+For scheduled/read-only operation, token handling, provider failures, and
+incident response, see the [operations runbook](docs/OPERATIONS.md).
