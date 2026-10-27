@@ -34,6 +34,9 @@ interface RpcLedgerSnapshot {
 
 export interface InspectedEntry {
   key: string;
+  name?: string;
+  owner?: string;
+  notes?: string;
   keyType: "contractData" | "contractCode";
   durability: "temporary" | "persistent" | null;
   ttlKey: string;

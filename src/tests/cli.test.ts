@@ -70,6 +70,7 @@ test("CLI writes a complete report atomically with private file permissions", as
   assert.ok(address && typeof address !== "string");
   const directory = await mkdtemp(join(tmpdir(), "soroban-cli-"));
   const configPath = join(directory, "config.json");
+  const manifestPath = join(directory, "storage-keys.json");
   const outputPath = join(directory, "report.json");
   try {
     await writeFile(
@@ -79,6 +80,20 @@ test("CLI writes a complete report atomically with private file permissions", as
         rpcUrl: `http://127.0.0.1:${address.port}`,
         networkPassphrase: passphrase,
         ledgerCloseSeconds: 86_400,
+      }),
+    );
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            name: "sample contract code",
+            key,
+            owner: "tooling team",
+            notes: "Known test key",
+          },
+        ],
       }),
     );
     const cliPath = fileURLToPath(new URL("../cli.js", import.meta.url));
@@ -91,8 +106,8 @@ test("CLI writes a complete report atomically with private file permissions", as
             "--config",
             configPath,
             "inspect",
-            "--key",
-            key,
+            "--manifest",
+            manifestPath,
             "--format",
             "json",
             "--output",
@@ -115,6 +130,9 @@ test("CLI writes a complete report atomically with private file permissions", as
       networkPassphrase: string;
       entries: Array<{
         key: string;
+        name: string;
+        owner: string;
+        notes: string;
         keyType: string;
         durability: string | null;
         ttlKey: string;
@@ -127,6 +145,9 @@ test("CLI writes a complete report atomically with private file permissions", as
     assert.equal(report.networkPassphrase, passphrase);
     assert.deepEqual(report.entries[0], {
       key,
+      name: "sample contract code",
+      owner: "tooling team",
+      notes: "Known test key",
       keyType: "contractCode",
       durability: null,
       ttlKey: parseStorageKey(key).ttlKeyXdr,

@@ -11,10 +11,15 @@ import {
 } from "./maintenance-planner.js";
 import { SorobanRpcClient } from "./rpc-client.js";
 import { formatReport, type OutputFormat } from "./report.js";
+import {
+  parseStorageKeyManifest,
+  type StorageKeyManifestEntry,
+} from "./manifest.js";
 
 interface CommandOptions {
   key?: string[];
   keysFile?: string;
+  manifest?: string;
   format?: OutputFormat;
   output?: string;
   targetDays?: number;
@@ -39,7 +44,51 @@ function nonNegativeInteger(value: string): string {
   return value;
 }
 
-async function loadKeys(options: CommandOptions): Promise<string[]> {
+async function loadKeys(
+  options: CommandOptions,
+): Promise<{ keys: string[]; metadata: Map<string, StorageKeyManifestEntry> }> {
+  const hasDirectKeys =
+    (options.key?.length ?? 0) > 0 || options.keysFile !== undefined;
+  if (options.manifest && hasDirectKeys) {
+    throw new Error("--manifest cannot be combined with --key or --keys-file");
+  }
+  if (options.manifest) {
+    let fileStat: Awaited<ReturnType<typeof stat>>;
+    try {
+      fileStat = await stat(options.manifest);
+    } catch (error) {
+      throw new Error(
+        `Unable to inspect manifest "${options.manifest}": ${String(error)}`,
+      );
+    }
+    if (!fileStat.isFile()) {
+      throw new Error(`Manifest "${options.manifest}" is not a regular file`);
+    }
+    if (fileStat.size > MAX_KEYS_FILE_BYTES) {
+      throw new Error(
+        `Manifest exceeds the ${MAX_KEYS_FILE_BYTES}-byte safety limit`,
+      );
+    }
+    let text: string;
+    try {
+      text = await readFile(options.manifest, "utf8");
+    } catch (error) {
+      throw new Error(
+        `Unable to read manifest "${options.manifest}": ${String(error)}`,
+      );
+    }
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(text) as unknown;
+    } catch (error) {
+      throw new Error(`Manifest is not valid JSON: ${String(error)}`);
+    }
+    const manifest = parseStorageKeyManifest(parsedJson);
+    return {
+      keys: manifest.entries.map((entry) => entry.key),
+      metadata: new Map(manifest.entries.map((entry) => [entry.key, entry])),
+    };
+  }
   const keys = [...(options.key ?? [])];
   if (options.keysFile) {
     let fileStat: Awaited<ReturnType<typeof stat>>;
@@ -74,12 +123,14 @@ async function loadKeys(options: CommandOptions): Promise<string[]> {
     );
   }
   if (keys.length === 0) {
-    throw new Error("Provide one or more --key values or a --keys-file");
+    throw new Error(
+      "Provide one or more --key values, a --keys-file, or a --manifest",
+    );
   }
   if (keys.length > 200) {
     throw new Error("Provide at most 200 ledger keys per command");
   }
-  return keys;
+  return { keys, metadata: new Map() };
 }
 
 function configOverrides(options: Record<string, unknown>): ConfigOverrides {
@@ -156,13 +207,17 @@ async function run(
   globalOptions: Record<string, unknown>,
 ): Promise<void> {
   const config = await resolveConfig(configOverrides(globalOptions));
-  const keys = await loadKeys(options);
+  const { keys, metadata } = await loadKeys(options);
   const { networkPassphrase, latestLedger, entries } =
     await new SorobanRpcClient(config).inspect(keys);
+  const labeledEntries = entries.map((entry) => ({
+    ...entry,
+    ...metadata.get(entry.key),
+  }));
   const report = createInspectionReport(
     config.network,
     latestLedger,
-    entries,
+    labeledEntries,
     config,
     networkPassphrase,
   );
@@ -229,6 +284,10 @@ async function main(): Promise<void> {
       "--keys-file <path>",
       "Text file containing one base64 LedgerKey XDR per line",
     )
+    .option(
+      "--manifest <path>",
+      "Versioned JSON manifest of named, known ledger keys",
+    )
     .addOption(
       new Option("--format <format>", "Output format")
         .choices(["table", "json", "csv"])
@@ -253,6 +312,10 @@ async function main(): Promise<void> {
     .option(
       "--keys-file <path>",
       "Text file containing one base64 LedgerKey XDR per line",
+    )
+    .option(
+      "--manifest <path>",
+      "Versioned JSON manifest of named, known ledger keys",
     )
     .option(
       "--target-days <days>",
