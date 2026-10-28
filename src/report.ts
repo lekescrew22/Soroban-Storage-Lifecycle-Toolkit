@@ -23,6 +23,12 @@ function formatCsv(report: InspectionReport | MaintenancePlan): string {
     "networkPassphrase",
     "latestLedger",
     "ledgerCloseSeconds",
+    "ledgerCloseIntervalSource",
+    "ledgerCloseIntervalSampleStartLedger",
+    "ledgerCloseIntervalSampleEndLedger",
+    "ledgerCloseIntervalSampleLedgerCount",
+    "ledgerCloseIntervalSampleIntervalCount",
+    "ledgerCloseIntervalFallbackReason",
     "limitations",
     "criticalDays",
     "warningDays",
@@ -59,6 +65,12 @@ function formatCsv(report: InspectionReport | MaintenancePlan): string {
       report.networkPassphrase,
       report.latestLedger,
       report.ledgerCloseSeconds,
+      report.ledgerCloseInterval.source,
+      report.ledgerCloseInterval.samplingWindow?.startLedger,
+      report.ledgerCloseInterval.samplingWindow?.endLedger,
+      report.ledgerCloseInterval.samplingWindow?.ledgerCount,
+      report.ledgerCloseInterval.samplingWindow?.intervalCount,
+      report.ledgerCloseInterval.fallbackReason,
       report.limitations.join("; "),
       report.thresholds.criticalDays,
       report.thresholds.warningDays,
@@ -94,8 +106,12 @@ function formatCsv(report: InspectionReport | MaintenancePlan): string {
 
 function formatTable(report: InspectionReport | MaintenancePlan): string {
   const plan = "plan" in report ? report.plan : undefined;
+  const interval = report.ledgerCloseInterval;
+  const sampling = interval.samplingWindow
+    ? `sampled ledgers ${interval.samplingWindow.startLedger}-${interval.samplingWindow.endLedger} (${interval.samplingWindow.intervalCount} intervals)`
+    : `no sampling window${interval.fallbackReason ? `; ${interval.fallbackReason}` : ""}`;
   const lines = [
-    `Network: ${report.network} (${report.networkPassphrase}) | Snapshot ledger: ${report.latestLedger} | Ledger interval: ${report.ledgerCloseSeconds}s`,
+    `Network: ${report.network} (${report.networkPassphrase}) | Snapshot ledger: ${report.latestLedger} | Ledger interval: ${report.ledgerCloseSeconds}s (${interval.source}; ${sampling})`,
     "NAME | KEY TYPE | DURABILITY | FOUND | LAST MODIFIED | LIVE UNTIL | DAYS LEFT | RISK" +
       (plan ? " | ACTION | EST. STROOPS" : ""),
   ];
