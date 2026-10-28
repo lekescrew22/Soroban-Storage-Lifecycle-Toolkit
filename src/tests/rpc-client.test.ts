@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { xdr } from "@stellar/stellar-sdk";
-import { ToolkitError } from "../errors.js";
+import { ToolkitError } from "../index.js";
 import type { ToolkitConfig } from "../config.js";
 import { parseStorageKey } from "../ledger-key.js";
 import { requireLiveUntilLedgerSeq, SorobanRpcClient } from "../rpc-client.js";
@@ -214,6 +214,93 @@ test("uses the configured interval when the RPC does not support ledger history"
     samplingWindow: null,
     fallbackReason: "ledger-history-unavailable",
   });
+});
+
+test("cancels before making any RPC request", async () => {
+  const key = xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 17) }),
+  ).toXDR("base64");
+  const controller = new AbortController();
+  controller.abort();
+  let requestCount = 0;
+  const fetchStub: typeof fetch = async () => {
+    requestCount += 1;
+    return Response.json({});
+  };
+
+  await assert.rejects(
+    new SorobanRpcClient(config, fetchStub).inspect([key], {
+      signal: controller.signal,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof ToolkitError);
+      assert.equal(error.code, "ABORTED");
+      return true;
+    },
+  );
+  assert.equal(requestCount, 0);
+});
+
+test("aborts an active RPC fetch without retrying", async () => {
+  const key = xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 18) }),
+  ).toXDR("base64");
+  const controller = new AbortController();
+  let requestCount = 0;
+  const fetchStub: typeof fetch = async (_input, init) => {
+    requestCount += 1;
+    return new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      signal?.addEventListener(
+        "abort",
+        () => reject(new Error("fetch aborted")),
+        { once: true },
+      );
+    });
+  };
+
+  const inspection = new SorobanRpcClient(config, fetchStub).inspect([key], {
+    signal: controller.signal,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  controller.abort();
+
+  await assert.rejects(inspection, (error: unknown) => {
+    assert.ok(error instanceof ToolkitError);
+    assert.equal(error.code, "ABORTED");
+    return true;
+  });
+  assert.equal(requestCount, 1);
+});
+
+test("cancels a retry backoff without issuing another request", async () => {
+  const key = xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 19) }),
+  ).toXDR("base64");
+  const controller = new AbortController();
+  let requestCount = 0;
+  let markRequestStarted!: () => void;
+  const requestStarted = new Promise<void>((resolve) => {
+    markRequestStarted = resolve;
+  });
+  const fetchStub: typeof fetch = async () => {
+    requestCount += 1;
+    markRequestStarted();
+    throw new Error("temporary network failure");
+  };
+
+  const inspection = new SorobanRpcClient(config, fetchStub).inspect([key], {
+    signal: controller.signal,
+  });
+  await requestStarted;
+  setTimeout(() => controller.abort(), 10);
+
+  await assert.rejects(inspection, (error: unknown) => {
+    assert.ok(error instanceof ToolkitError);
+    assert.equal(error.code, "ABORTED");
+    return true;
+  });
+  assert.equal(requestCount, 1);
 });
 
 test("treats omitted expiration metadata as unknown and rejects invalid metadata", async () => {

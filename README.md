@@ -121,7 +121,18 @@ const plan = createMaintenancePlan(report, config, 30);
 
 The SDK validates the LedgerKey XDR and supports only TTL-managed Soroban contract data/code keys. It derives the related TTL key for inclusion in reports, but obtains expiration from the `liveUntilLedgerSeq` metadata on the storage entry response rather than querying TTL keys directly. If an RPC provider omits that metadata, expiration and risk are reported as unknown rather than inferred. Named networks are checked by passphrase; custom endpoints report their returned passphrase without asserting its identity.
 
-SDK failures use the exported `ToolkitError` class and stable `code` values (`INVALID_INPUT`, `CONFIGURATION`, `NETWORK_MISMATCH`, `RPC_TRANSPORT`, `RPC_HTTP`, `RPC_ERROR`, and `RPC_RESPONSE`). Missing expiration metadata remains a successful inspection with a `null` ledger and `unknown` risk; strict callers can use `requireLiveUntilLedgerSeq(entry)`, which raises `TTL_METADATA_UNAVAILABLE`. Typed errors preserve the underlying cause where available; avoid logging causes if your application treats transport details as sensitive.
+SDK failures use the exported `ToolkitError` class and stable `code` values (`INVALID_INPUT`, `CONFIGURATION`, `NETWORK_MISMATCH`, `ABORTED`, `RPC_TRANSPORT`, `RPC_HTTP`, `RPC_ERROR`, and `RPC_RESPONSE`). Missing expiration metadata remains a successful inspection with a `null` ledger and `unknown` risk; strict callers can use `requireLiveUntilLedgerSeq(entry)`, which raises `TTL_METADATA_UNAVAILABLE`. Typed errors preserve the underlying cause where available; avoid logging causes if your application treats transport details as sensitive.
+
+An inspection can be cancelled by passing an `AbortSignal` in its options. Cancellation stops active RPC fetches and retry waits, and rejects with a `ToolkitError` whose code is `ABORTED`:
+
+```ts
+const controller = new AbortController();
+const inspection = new SorobanRpcClient(config).inspect([ledgerKeyXdr], {
+  signal: controller.signal,
+});
+controller.abort();
+await inspection;
+```
 
 ## Development
 
