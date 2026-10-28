@@ -116,10 +116,18 @@ export class SorobanRpcClient {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async inspect(keys: string[]): Promise<RpcSnapshot> {
+  async inspect(
+    keys: string[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<RpcSnapshot> {
+    const { signal } = options;
     try {
-      return await this.inspectUnchecked(keys);
+      this.throwIfAborted(signal);
+      return await this.inspectUnchecked(keys, signal);
     } catch (error) {
+      if (signal?.aborted) {
+        throw this.abortError();
+      }
       if (error instanceof ToolkitError) {
         throw error;
       }
@@ -129,7 +137,10 @@ export class SorobanRpcClient {
     }
   }
 
-  private async inspectUnchecked(keys: string[]): Promise<RpcSnapshot> {
+  private async inspectUnchecked(
+    keys: string[],
+    signal?: AbortSignal,
+  ): Promise<RpcSnapshot> {
     if (keys.length === 0) {
       throw new ToolkitError(
         "INVALID_INPUT",
@@ -166,10 +177,11 @@ export class SorobanRpcClient {
       requested.add(parsed.xdr);
     }
 
-    const networkPassphrase = await this.verifyNetwork();
-    const snapshot = await this.getLedgerEntries([...requested]);
+    const networkPassphrase = await this.verifyNetwork(signal);
+    const snapshot = await this.getLedgerEntries([...requested], signal);
     const ledgerCloseInterval = await this.getLedgerCloseInterval(
       snapshot.latestLedger,
+      signal,
     );
     for (const returnedKey of snapshot.entries.keys()) {
       if (!requested.has(returnedKey)) {
@@ -214,6 +226,7 @@ export class SorobanRpcClient {
 
   private async getLedgerCloseInterval(
     latestLedger: number,
+    signal?: AbortSignal,
   ): Promise<LedgerCloseInterval> {
     const startLedger = latestLedger - LEDGER_INTERVALS_TO_SAMPLE;
     if (startLedger < 1) {
@@ -222,11 +235,15 @@ export class SorobanRpcClient {
 
     let result: unknown;
     try {
-      result = await this.callRpc("getLedgers", {
-        startLedger,
-        pagination: { limit: LEDGER_INTERVALS_TO_SAMPLE + 1 },
-        xdrFormat: "base64",
-      });
+      result = await this.callRpc(
+        "getLedgers",
+        {
+          startLedger,
+          pagination: { limit: LEDGER_INTERVALS_TO_SAMPLE + 1 },
+          xdrFormat: "base64",
+        },
+        signal,
+      );
     } catch (error) {
       if (error instanceof ToolkitError && error.code === "RPC_ERROR") {
         return this.fallbackLedgerCloseInterval("ledger-history-unavailable");
@@ -302,8 +319,8 @@ export class SorobanRpcClient {
     };
   }
 
-  private async verifyNetwork(): Promise<string> {
-    const result = await this.callRpc("getNetwork", {});
+  private async verifyNetwork(signal?: AbortSignal): Promise<string> {
+    const result = await this.callRpc("getNetwork", {}, signal);
     if (
       !isObject(result) ||
       typeof result.passphrase !== "string" ||
@@ -330,11 +347,18 @@ export class SorobanRpcClient {
     return result.passphrase;
   }
 
-  private async getLedgerEntries(keys: string[]): Promise<RpcLedgerSnapshot> {
-    const result = await this.callRpc("getLedgerEntries", {
-      keys,
-      xdrFormat: "base64",
-    });
+  private async getLedgerEntries(
+    keys: string[],
+    signal?: AbortSignal,
+  ): Promise<RpcLedgerSnapshot> {
+    const result = await this.callRpc(
+      "getLedgerEntries",
+      {
+        keys,
+        xdrFormat: "base64",
+      },
+      signal,
+    );
     if (
       !isObject(result) ||
       !Number.isSafeInteger(result.latestLedger) ||
@@ -379,8 +403,13 @@ export class SorobanRpcClient {
     return { latestLedger, entries };
   }
 
-  private async callRpc(method: string, params: unknown): Promise<unknown> {
+  private async callRpc(
+    method: string,
+    params: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     for (let attempt = 0; attempt < MAX_RPC_ATTEMPTS; attempt += 1) {
+      this.throwIfAborted(signal);
       let response: Response;
       try {
         response = await this.fetchImpl(this.config.rpcUrl, {
@@ -392,12 +421,17 @@ export class SorobanRpcClient {
               : {}),
           },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+            : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           redirect: "error",
         });
       } catch (error) {
+        if (signal?.aborted) {
+          throw this.abortError();
+        }
         if (attempt + 1 < MAX_RPC_ATTEMPTS) {
-          await this.delay(RETRY_DELAYS_MS[attempt]!);
+          await this.delay(RETRY_DELAYS_MS[attempt]!, signal);
           continue;
         }
         throw new ToolkitError(
@@ -406,13 +440,14 @@ export class SorobanRpcClient {
           { cause: error },
         );
       }
+      this.throwIfAborted(signal);
       if (!response.ok) {
         if (
           [429, 500, 502, 503, 504].includes(response.status) &&
           attempt + 1 < MAX_RPC_ATTEMPTS
         ) {
           await response.body?.cancel();
-          await this.delay(this.retryDelay(response, attempt));
+          await this.delay(this.retryDelay(response, attempt), signal);
           continue;
         }
         throw new ToolkitError(
@@ -420,12 +455,24 @@ export class SorobanRpcClient {
           `Soroban RPC returned HTTP ${response.status}`,
         );
       }
-      return this.parseResponse(response);
+      const result = await this.parseResponse(response);
+      this.throwIfAborted(signal);
+      return result;
     }
     throw new ToolkitError(
       "RPC_TRANSPORT",
       "Soroban RPC request failed after exhausting retries",
     );
+  }
+
+  private throwIfAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+      throw this.abortError();
+    }
+  }
+
+  private abortError(): ToolkitError {
+    return new ToolkitError("ABORTED", "Inspection was cancelled");
   }
 
   private retryDelay(response: Response, attempt: number): number {
@@ -442,8 +489,20 @@ export class SorobanRpcClient {
     return RETRY_DELAYS_MS[attempt]!;
   }
 
-  private delay(milliseconds: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  private delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.throwIfAborted(signal);
+      const timeout = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, milliseconds);
+      const onAbort = () => {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
+        reject(this.abortError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   private async parseResponse(response: Response): Promise<unknown> {
