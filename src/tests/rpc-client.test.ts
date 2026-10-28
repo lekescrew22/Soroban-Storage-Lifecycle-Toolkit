@@ -51,6 +51,13 @@ test("retrieves a known entry and its expiration metadata from one RPC snapshot"
   ).toXDR("base64");
   let requestedKeys: string[] = [];
   const fetchStub = rpcStub(async (request) => {
+    if (request.method === "getLedgers") {
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {},
+      });
+    }
     requestedKeys = request.params.keys ?? [];
     return Response.json({
       jsonrpc: "2.0",
@@ -77,6 +84,136 @@ test("retrieves a known entry and its expiration metadata from one RPC snapshot"
   assert.equal(result.entries[0]?.durability, null);
   assert.equal(result.entries[0]?.liveUntilLedgerSeq, 150);
   assert.ok(result.entries[0]?.entryBytes);
+  assert.equal(result.ledgerCloseInterval.source, "configured-fallback");
+  assert.equal(result.ledgerCloseInterval.seconds, config.ledgerCloseSeconds);
+});
+
+test("uses a validated recent getLedgers close-time sample", async () => {
+  const key = xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 14) }),
+  ).toXDR("base64");
+  let sampleParams: unknown;
+  const fetchStub = rpcStub(async (request) => {
+    if (request.method === "getLedgers") {
+      sampleParams = request.params;
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+          ledgers: Array.from({ length: 11 }, (_, index) => ({
+            sequence: 90 + index,
+            ledgerCloseTime: String(1_000 + index * 5),
+          })),
+        },
+      });
+    }
+    return Response.json({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: { latestLedger: 100, entries: [] },
+    });
+  });
+
+  const snapshot = await new SorobanRpcClient(config, fetchStub).inspect([key]);
+  assert.deepEqual(sampleParams, {
+    startLedger: 90,
+    pagination: { limit: 11 },
+    xdrFormat: "base64",
+  });
+  assert.deepEqual(snapshot.ledgerCloseInterval, {
+    seconds: 5,
+    source: "observed",
+    samplingWindow: {
+      startLedger: 90,
+      endLedger: 100,
+      ledgerCount: 11,
+      intervalCount: 10,
+    },
+  });
+});
+
+test("falls back explicitly when recent ledger close-time samples are unusable", async (t) => {
+  const key = xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 15) }),
+  ).toXDR("base64");
+  const cases = [
+    {
+      name: "missing close time",
+      reason: "missing-close-time",
+      ledgers: Array.from({ length: 11 }, (_, index) => ({
+        sequence: 90 + index,
+        ...(index === 0 ? {} : { ledgerCloseTime: String(1_000 + index * 5) }),
+      })),
+    },
+    {
+      name: "non-monotonic close time",
+      reason: "non-monotonic-close-time",
+      ledgers: Array.from({ length: 11 }, (_, index) => ({
+        sequence: 90 + index,
+        ledgerCloseTime: String(1_000 + (index === 5 ? 4 : index) * 5),
+      })),
+    },
+    {
+      name: "implausible close-time gap",
+      reason: "implausible-close-time",
+      ledgers: Array.from({ length: 11 }, (_, index) => ({
+        sequence: 90 + index,
+        ledgerCloseTime: String(1_000 + index * (index === 5 ? 100 : 5)),
+      })),
+    },
+  ];
+
+  for (const sample of cases) {
+    await t.test(sample.name, async () => {
+      const fetchStub = rpcStub(async (request) =>
+        Response.json({
+          jsonrpc: "2.0",
+          id: request.id,
+          result:
+            request.method === "getLedgers"
+              ? { ledgers: sample.ledgers }
+              : { latestLedger: 100, entries: [] },
+        }),
+      );
+      const snapshot = await new SorobanRpcClient(config, fetchStub).inspect([
+        key,
+      ]);
+      assert.deepEqual(snapshot.ledgerCloseInterval, {
+        seconds: config.ledgerCloseSeconds,
+        source: "configured-fallback",
+        samplingWindow: null,
+        fallbackReason: sample.reason,
+      });
+    });
+  }
+});
+
+test("uses the configured interval when the RPC does not support ledger history", async () => {
+  const key = xdr.LedgerKey.contractCode(
+    new xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 16) }),
+  ).toXDR("base64");
+  const fetchStub = rpcStub(async (request) => {
+    if (request.method === "getLedgers") {
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        error: { code: -32601, message: "Method not found" },
+      });
+    }
+    return Response.json({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: { latestLedger: 100, entries: [] },
+    });
+  });
+
+  const snapshot = await new SorobanRpcClient(config, fetchStub).inspect([key]);
+  assert.deepEqual(snapshot.ledgerCloseInterval, {
+    seconds: config.ledgerCloseSeconds,
+    source: "configured-fallback",
+    samplingWindow: null,
+    fallbackReason: "ledger-history-unavailable",
+  });
 });
 
 test("treats omitted expiration metadata as unknown and rejects invalid metadata", async () => {
@@ -286,6 +423,13 @@ test("retries transient RPC failures without retrying successful requests", asyn
   ).toXDR("base64");
   let ledgerAttempts = 0;
   const fetchStub = rpcStub(async (request) => {
+    if (request.method === "getLedgers") {
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {},
+      });
+    }
     ledgerAttempts += 1;
     if (ledgerAttempts === 1) {
       return Response.json(
@@ -334,7 +478,9 @@ test("sends bearer tokens only in the authorization header", async () => {
       method: string;
     };
     const headers = new Headers(init?.headers);
-    observed.push(headers.get("authorization") ?? "");
+    if (request.method !== "getLedgers") {
+      observed.push(headers.get("authorization") ?? "");
+    }
     return Response.json({
       jsonrpc: "2.0",
       id: request.id,

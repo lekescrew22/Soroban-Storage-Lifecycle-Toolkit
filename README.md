@@ -74,13 +74,13 @@ node dist/cli.js --network custom --rpc-url https://rpc.example.org \
   --critical-days 7 --warning-days 30 inspect --key '<BASE64_LEDGER_KEY_XDR>'
 ```
 
-You can also use `--config config.json`, `STELLAR_NETWORK`, and `STELLAR_RPC_URL`. CLI options override config-file values, which override environment/default values. See [`config.example.json`](config.example.json). Risk defaults are 7 critical days and 30 warning days; the default ledger interval is five seconds and can be changed with `ledgerCloseSeconds`.
+You can also use `--config config.json`, `STELLAR_NETWORK`, and `STELLAR_RPC_URL`. CLI options override config-file values, which override environment/default values. See [`config.example.json`](config.example.json). Risk defaults are 7 critical days and 30 warning days. The toolkit samples the latest 10 ledger intervals from the RPC `getLedgers` close-time metadata and uses that observed cadence only when the 11-ledger window is complete, strictly increasing, and every interval is at most 60 seconds. If history or timestamps are unavailable or invalid, `ledgerCloseSeconds` (five seconds by default) is used as an explicit fallback. Reports and plans include the cadence source, sampling window, and fallback reason when applicable.
 
 For custom endpoints, set `networkPassphrase` in the config or pass `--network-passphrase` to pin the expected Stellar network passphrase. Named networks are checked against their canonical passphrases automatically.
 
 For RPC providers requiring bearer authentication, set `STELLAR_RPC_AUTH_TOKEN` in the environment. The token is sent in the Authorization header and is never included in the report. Avoid putting credentials in endpoint URLs or committed config files.
 
-The CLI accepts up to 200 unique contract data/code keys per call. Reports include the verified network passphrase, snapshot ledger, ledger-time assumption, entry modification ledger, TTL expiration ledger when supplied by RPC, estimated remaining ledgers/days, risk, and the known-key limitation. Output formats are `table`, `json`, and `csv`. CSV text cells beginning with spreadsheet formula markers (`=`, `+`, `-`, or `@`, including after leading whitespace/control characters) are prefixed with an apostrophe to reduce formula-injection risk; numeric report values remain numeric.
+The CLI accepts up to 200 unique contract data/code keys per call. Reports include the verified network passphrase, snapshot ledger, ledger-time assumption and its source/sampling window, entry modification ledger, TTL expiration ledger when supplied by RPC, estimated remaining ledgers/days, risk, and the known-key limitation. Output formats are `table`, `json`, and `csv`. CSV text cells beginning with spreadsheet formula markers (`=`, `+`, `-`, or `@`, including after leading whitespace/control characters) are prefixed with an apostrophe to reduce formula-injection risk; numeric report values remain numeric.
 
 ## Extension-cost estimate
 
@@ -94,7 +94,7 @@ This is a user-supplied planning approximation, not the protocol's authoritative
 
 ## JSON report schema
 
-The versioned [JSON Schema for report version 1](schemas/report-v1.schema.json) describes both inspection reports and dry-run plans. JSON consumers should check `schemaVersion` before processing reports. Additive optional entry metadata may be introduced without changing the schema version; changes to required fields, field meaning, or enum values require a new schema version. `remainingDays` is an estimate based on `ledgerCloseSeconds`; `estimatedCostStroops` and `estimatedTotalStroops` are optional illustrative estimates, not quotes.
+The versioned [JSON Schema for report version 1](schemas/report-v1.schema.json) describes both inspection reports and dry-run plans. JSON consumers should check `schemaVersion` before processing reports. Additive optional metadata may be introduced without changing the schema version; changes to required fields, field meaning, or enum values require a new schema version. `remainingDays` and plan target ledgers use the reported effective ledger interval; `estimatedCostStroops` and `estimatedTotalStroops` are optional illustrative estimates, not quotes.
 
 ## SDK
 
@@ -114,6 +114,7 @@ const report = createInspectionReport(
   snapshot.entries,
   config,
   snapshot.networkPassphrase,
+  snapshot.ledgerCloseInterval,
 );
 const plan = createMaintenancePlan(report, config, 30);
 ```

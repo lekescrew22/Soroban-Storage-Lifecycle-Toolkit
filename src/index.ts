@@ -9,7 +9,11 @@ export type { ParsedStorageKey } from "./ledger-key.js";
 export { assessRisk } from "./risk.js";
 export type { RiskAssessment, RiskLevel } from "./risk.js";
 export { requireLiveUntilLedgerSeq, SorobanRpcClient } from "./rpc-client.js";
-export type { InspectedEntry, RpcSnapshot } from "./rpc-client.js";
+export type {
+  InspectedEntry,
+  LedgerCloseInterval,
+  RpcSnapshot,
+} from "./rpc-client.js";
 export {
   createInspectionReport,
   createMaintenancePlan,

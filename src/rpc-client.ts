@@ -12,6 +12,8 @@ const MAX_REQUEST_BYTES = 1_000_000;
 const MAX_ENTRY_XDR_BYTES = 10 * 1024 * 1024;
 const MAX_RPC_RESPONSE_BYTES = 25 * 1024 * 1024;
 const MAX_LEDGER_SEQUENCE = 0xffff_ffff;
+const LEDGER_INTERVALS_TO_SAMPLE = 10;
+const MAX_PLAUSIBLE_LEDGER_INTERVAL_SECONDS = 60;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RPC_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [100, 250] as const;
@@ -33,6 +35,26 @@ interface RpcLedgerSnapshot {
   entries: Map<string, RpcLedgerEntry>;
 }
 
+export interface LedgerCloseInterval {
+  seconds: number;
+  source: "observed" | "configured-fallback";
+  samplingWindow: {
+    startLedger: number;
+    endLedger: number;
+    ledgerCount: number;
+    intervalCount: number;
+  } | null;
+  fallbackReason?:
+    | "not-sampled"
+    | "ledger-history-unavailable"
+    | "insufficient-ledger-history"
+    | "incomplete-ledger-window"
+    | "missing-close-time"
+    | "invalid-close-time"
+    | "non-monotonic-close-time"
+    | "implausible-close-time";
+}
+
 export interface InspectedEntry {
   key: string;
   name?: string;
@@ -50,6 +72,7 @@ export interface InspectedEntry {
 export interface RpcSnapshot {
   networkPassphrase: string;
   latestLedger: number;
+  ledgerCloseInterval: LedgerCloseInterval;
   entries: InspectedEntry[];
 }
 
@@ -145,6 +168,9 @@ export class SorobanRpcClient {
 
     const networkPassphrase = await this.verifyNetwork();
     const snapshot = await this.getLedgerEntries([...requested]);
+    const ledgerCloseInterval = await this.getLedgerCloseInterval(
+      snapshot.latestLedger,
+    );
     for (const returnedKey of snapshot.entries.keys()) {
       if (!requested.has(returnedKey)) {
         throw new ToolkitError(
@@ -178,7 +204,102 @@ export class SorobanRpcClient {
       };
     });
 
-    return { networkPassphrase, latestLedger: snapshot.latestLedger, entries };
+    return {
+      networkPassphrase,
+      latestLedger: snapshot.latestLedger,
+      ledgerCloseInterval,
+      entries,
+    };
+  }
+
+  private async getLedgerCloseInterval(
+    latestLedger: number,
+  ): Promise<LedgerCloseInterval> {
+    const startLedger = latestLedger - LEDGER_INTERVALS_TO_SAMPLE;
+    if (startLedger < 1) {
+      return this.fallbackLedgerCloseInterval("insufficient-ledger-history");
+    }
+
+    let result: unknown;
+    try {
+      result = await this.callRpc("getLedgers", {
+        startLedger,
+        pagination: { limit: LEDGER_INTERVALS_TO_SAMPLE + 1 },
+        xdrFormat: "base64",
+      });
+    } catch (error) {
+      if (error instanceof ToolkitError && error.code === "RPC_ERROR") {
+        return this.fallbackLedgerCloseInterval("ledger-history-unavailable");
+      }
+      throw error;
+    }
+    if (!isObject(result) || !Array.isArray(result.ledgers)) {
+      return this.fallbackLedgerCloseInterval("incomplete-ledger-window");
+    }
+    if (result.ledgers.length !== LEDGER_INTERVALS_TO_SAMPLE + 1) {
+      return this.fallbackLedgerCloseInterval("incomplete-ledger-window");
+    }
+
+    const timestamps: number[] = [];
+    for (let index = 0; index < result.ledgers.length; index += 1) {
+      const ledger = result.ledgers[index];
+      if (!isObject(ledger) || ledger.sequence !== startLedger + index) {
+        return this.fallbackLedgerCloseInterval("incomplete-ledger-window");
+      }
+      if (
+        ledger.ledgerCloseTime === undefined ||
+        ledger.ledgerCloseTime === null
+      ) {
+        return this.fallbackLedgerCloseInterval("missing-close-time");
+      }
+      if (
+        typeof ledger.ledgerCloseTime !== "string" ||
+        !/^\d+$/.test(ledger.ledgerCloseTime)
+      ) {
+        return this.fallbackLedgerCloseInterval("invalid-close-time");
+      }
+      const timestamp = Number(ledger.ledgerCloseTime);
+      if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
+        return this.fallbackLedgerCloseInterval("invalid-close-time");
+      }
+      timestamps.push(timestamp);
+    }
+
+    const intervals: number[] = [];
+    for (let index = 1; index < timestamps.length; index += 1) {
+      const interval = timestamps[index]! - timestamps[index - 1]!;
+      if (interval <= 0) {
+        return this.fallbackLedgerCloseInterval("non-monotonic-close-time");
+      }
+      if (interval > MAX_PLAUSIBLE_LEDGER_INTERVAL_SECONDS) {
+        return this.fallbackLedgerCloseInterval("implausible-close-time");
+      }
+      intervals.push(interval);
+    }
+
+    return {
+      seconds:
+        intervals.reduce((total, interval) => total + interval, 0) /
+        intervals.length,
+      source: "observed",
+      samplingWindow: {
+        startLedger,
+        endLedger: latestLedger,
+        ledgerCount: timestamps.length,
+        intervalCount: intervals.length,
+      },
+    };
+  }
+
+  private fallbackLedgerCloseInterval(
+    fallbackReason: NonNullable<LedgerCloseInterval["fallbackReason"]>,
+  ): LedgerCloseInterval {
+    return {
+      seconds: this.config.ledgerCloseSeconds,
+      source: "configured-fallback",
+      samplingWindow: null,
+      fallbackReason,
+    };
   }
 
   private async verifyNetwork(): Promise<string> {

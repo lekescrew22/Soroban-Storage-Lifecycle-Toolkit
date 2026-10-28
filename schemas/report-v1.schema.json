@@ -71,6 +71,52 @@
         "networkPassphrase": { "type": "string", "minLength": 1 },
         "latestLedger": { "$ref": "#/$defs/uint32" },
         "ledgerCloseSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "ledgerCloseInterval": {
+          "type": "object",
+          "properties": {
+            "seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "source": {
+              "type": "string",
+              "enum": ["observed", "configured-fallback"]
+            },
+            "samplingWindow": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "startLedger": { "$ref": "#/$defs/uint32" },
+                    "endLedger": { "$ref": "#/$defs/uint32" },
+                    "ledgerCount": { "type": "integer", "minimum": 1 },
+                    "intervalCount": { "type": "integer", "minimum": 1 }
+                  },
+                  "required": [
+                    "startLedger",
+                    "endLedger",
+                    "ledgerCount",
+                    "intervalCount"
+                  ],
+                  "additionalProperties": false
+                },
+                { "type": "null" }
+              ]
+            },
+            "fallbackReason": {
+              "type": "string",
+              "enum": [
+                "not-sampled",
+                "ledger-history-unavailable",
+                "insufficient-ledger-history",
+                "incomplete-ledger-window",
+                "missing-close-time",
+                "invalid-close-time",
+                "non-monotonic-close-time",
+                "implausible-close-time"
+              ]
+            }
+          },
+          "required": ["seconds", "source", "samplingWindow"],
+          "additionalProperties": false
+        },
         "thresholds": {
           "type": "object",
           "properties": {
