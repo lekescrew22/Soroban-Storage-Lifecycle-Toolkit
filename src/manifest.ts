@@ -1,4 +1,5 @@
 import { parseStorageKey } from "./ledger-key.js";
+import { MAX_INSPECT_KEYS } from "./rpc-client.js";
 
 export interface StorageKeyManifestEntry {
   name: string;
@@ -42,8 +43,10 @@ export function parseStorageKeyManifest(value: unknown): StorageKeyManifest {
   if (!Array.isArray(value.entries) || value.entries.length === 0) {
     throw new Error('Key manifest "entries" must be a non-empty array');
   }
-  if (value.entries.length > 200) {
-    throw new Error("Key manifest may contain at most 200 entries");
+  if (value.entries.length > MAX_INSPECT_KEYS) {
+    throw new Error(
+      `Key manifest may contain at most ${MAX_INSPECT_KEYS} entries`,
+    );
   }
 
   const names = new Set<string>();

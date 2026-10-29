@@ -84,12 +84,12 @@ test("rejects empty and oversized entry lists and unknown fields", () => {
     () =>
       parseStorageKeyManifest({
         version: 1,
-        entries: Array.from({ length: 201 }, (_, index) => ({
+        entries: Array.from({ length: 1001 }, (_, index) => ({
           name: `key-${index}`,
           key: contractCodeKey(index),
         })),
       }),
-    /at most 200/,
+    /at most 1000/,
   );
   assert.throws(
     () =>

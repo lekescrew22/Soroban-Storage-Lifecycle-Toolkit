@@ -204,3 +204,34 @@ test("does not treat an entry live through the current ledger as already expired
   const plan = createMaintenancePlan(report, config, 30);
   assert.equal(plan.plan.actions[0]?.action, "extend");
 });
+
+test("states snapshot consistency limits only when several RPC requests were used", () => {
+  const single = createInspectionReport(
+    "testnet",
+    100,
+    [entry()],
+    config,
+    "Test SDF Network ; September 2015",
+    undefined,
+    { requestCount: 1, oldestLedger: 100, latestLedger: 100 },
+  );
+  assert.ok(!single.limitations.some((line) => /separate/.test(line)));
+
+  const chunked = createInspectionReport(
+    "testnet",
+    103,
+    [entry()],
+    config,
+    "Test SDF Network ; September 2015",
+    undefined,
+    { requestCount: 3, oldestLedger: 101, latestLedger: 103 },
+  );
+  assert.ok(
+    chunked.limitations.some(
+      (line) =>
+        /3 separate getLedgerEntries requests/.test(line) &&
+        /ledgers 101 through 103/.test(line) &&
+        /from ledger 103/.test(line),
+    ),
+  );
+});
