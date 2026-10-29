@@ -210,8 +210,13 @@ async function run(
 ): Promise<void> {
   const config = await resolveConfig(configOverrides(globalOptions));
   const { keys, metadata } = await loadKeys(options);
-  const { networkPassphrase, latestLedger, entries, consistency } =
-    await new SorobanRpcClient(config).inspect(keys);
+  const {
+    networkPassphrase,
+    latestLedger,
+    ledgerCloseInterval,
+    entries,
+    consistency,
+  } = await new SorobanRpcClient(config).inspect(keys);
   const labeledEntries = entries.map((entry) => ({
     ...entry,
     ...metadata.get(entry.key),
@@ -222,6 +227,7 @@ async function run(
     labeledEntries,
     config,
     networkPassphrase,
+    ledgerCloseInterval,
     consistency,
   );
   const result =
@@ -266,7 +272,7 @@ async function main(): Promise<void> {
     )
     .option(
       "--ledger-close-seconds <seconds>",
-      "Average ledger close time used for estimates",
+      "Fallback ledger close time when RPC history is unavailable",
       (value) => positiveNumber(value, "ledger-close-seconds"),
     )
     .option(

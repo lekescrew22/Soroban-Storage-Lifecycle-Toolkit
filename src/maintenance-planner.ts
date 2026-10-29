@@ -1,5 +1,9 @@
 import type { ToolkitConfig } from "./config.js";
-import type { InspectedEntry, SnapshotConsistency } from "./rpc-client.js";
+import type {
+  InspectedEntry,
+  LedgerCloseInterval,
+  SnapshotConsistency,
+} from "./rpc-client.js";
 import { assessRisk, type RiskLevel } from "./risk.js";
 
 export interface InspectionReport {
@@ -8,6 +12,7 @@ export interface InspectionReport {
   networkPassphrase: string;
   latestLedger: number;
   ledgerCloseSeconds: number;
+  ledgerCloseInterval: LedgerCloseInterval;
   thresholds: { criticalDays: number; warningDays: number };
   entries: Array<
     InspectedEntry & {
@@ -44,9 +49,22 @@ export function createInspectionReport(
   entries: InspectedEntry[],
   config: ToolkitConfig,
   networkPassphrase: string,
+  ledgerCloseInterval?: LedgerCloseInterval,
   consistency?: SnapshotConsistency,
 ): InspectionReport {
-  assessRisk(null, latestLedger, config);
+  const interval =
+    ledgerCloseInterval ??
+    ({
+      seconds: config.ledgerCloseSeconds,
+      source: "configured-fallback",
+      samplingWindow: null,
+      fallbackReason: "not-sampled",
+    } satisfies LedgerCloseInterval);
+  const riskConfig = {
+    ...config,
+    ledgerCloseSeconds: interval.seconds,
+  };
+  assessRisk(null, latestLedger, riskConfig);
   if (!network || !networkPassphrase) {
     throw new Error("network and network-passphrase must not be empty");
   }
@@ -54,7 +72,7 @@ export function createInspectionReport(
     const assessment = assessRisk(
       entry.liveUntilLedgerSeq,
       latestLedger,
-      config,
+      riskConfig,
     );
     return {
       ...entry,
@@ -68,7 +86,8 @@ export function createInspectionReport(
     network,
     networkPassphrase,
     latestLedger,
-    ledgerCloseSeconds: config.ledgerCloseSeconds,
+    ledgerCloseSeconds: interval.seconds,
+    ledgerCloseInterval: interval,
     thresholds: {
       criticalDays: config.criticalDays,
       warningDays: config.warningDays,
@@ -104,7 +123,7 @@ export function createMaintenancePlan(
   }
   const targetLedger =
     report.latestLedger +
-    Math.ceil((targetDays * 86_400) / config.ledgerCloseSeconds);
+    Math.ceil((targetDays * 86_400) / report.ledgerCloseSeconds);
   if (!Number.isSafeInteger(targetLedger) || targetLedger > 0xffff_ffff) {
     throw new Error(
       "target-days produces a ledger number outside the supported uint32 range",
@@ -112,7 +131,7 @@ export function createMaintenancePlan(
   }
   const hasRate = config.rentFeePerByteLedger !== undefined;
   const assumptions = [
-    `Target TTL is ${targetDays} days from ledger ${report.latestLedger}, using ${config.ledgerCloseSeconds} seconds per ledger.`,
+    `Target TTL is ${targetDays} days from ledger ${report.latestLedger}, using ${report.ledgerCloseSeconds} seconds per ledger from ${report.ledgerCloseInterval.source}${report.ledgerCloseInterval.samplingWindow ? ` (sampled ledgers ${report.ledgerCloseInterval.samplingWindow.startLedger}-${report.ledgerCloseInterval.samplingWindow.endLedger}, ${report.ledgerCloseInterval.samplingWindow.intervalCount} intervals)` : ` (no sampling window${report.ledgerCloseInterval.fallbackReason ? `; ${report.ledgerCloseInterval.fallbackReason}` : ""})`}.`,
     hasRate
       ? `Cost is an illustrative estimate: ledger-entry data XDR bytes x added ledgers x configured ${config.rentFeePerByteLedger} stroops per byte-ledger.`
       : "No rent rate was configured; extension costs are not estimated.",

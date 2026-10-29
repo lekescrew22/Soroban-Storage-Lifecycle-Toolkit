@@ -1,5 +1,7 @@
 export { resolveConfig } from "./config.js";
 export type { ConfigOverrides, Network, ToolkitConfig } from "./config.js";
+export { isToolkitError, ToolkitError } from "./errors.js";
+export type { ToolkitErrorCode } from "./errors.js";
 export {
   parseStorageKey,
   decodeLedgerEntryData,
@@ -16,6 +18,7 @@ export {
 } from "./rpc-client.js";
 export type {
   InspectedEntry,
+  LedgerCloseInterval,
   RpcSnapshot,
   SnapshotConsistency,
   SorobanRpcClientOptions,

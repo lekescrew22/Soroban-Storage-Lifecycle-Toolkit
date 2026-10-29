@@ -53,6 +53,7 @@ test("classifies ledger lifetimes at the configured risk boundaries", () => {
   );
   assert.equal(report.entries[0]?.remainingLedgers, 7);
   assert.equal(report.entries[0]?.remainingDays, 7);
+  assert.equal(report.ledgerCloseInterval.source, "configured-fallback");
 });
 
 test("validates risk inputs and handles the uint32 ledger boundary", () => {
@@ -100,7 +101,7 @@ test("builds a dry-run plan and estimates rent only for required extensions", ()
   assert.match(csv, /estimatedCostStroops/);
   assert.match(
     csv,
-    /"network","networkPassphrase","latestLedger","ledgerCloseSeconds","limitations","criticalDays","warningDays"/,
+    /"network","networkPassphrase","latestLedger","ledgerCloseSeconds","ledgerCloseIntervalSource","ledgerCloseIntervalSampleStartLedger"/,
   );
   assert.match(csv, /"testnet","Test SDF Network ; September 2015","100"/);
   assert.match(formatReport(plan, "json"), /"mode": "dry-run"/);
@@ -112,6 +113,39 @@ test("builds a dry-run plan and estimates rent only for required extensions", ()
   assert.throws(
     () => formatReport(plan, "xml" as "table"),
     /Unsupported report format/,
+  );
+});
+
+test("uses observed cadence for remaining days and target-ledger calculations", () => {
+  const report = createInspectionReport(
+    "testnet",
+    100,
+    [entry({ liveUntilLedgerSeq: 110 })],
+    config,
+    "Test SDF Network ; September 2015",
+    {
+      seconds: 10,
+      source: "observed",
+      samplingWindow: {
+        startLedger: 90,
+        endLedger: 100,
+        ledgerCount: 11,
+        intervalCount: 10,
+      },
+    },
+  );
+  const plan = createMaintenancePlan(report, config, 1);
+
+  assert.equal(report.ledgerCloseSeconds, 10);
+  assert.equal(report.entries[0]?.remainingDays, (10 * 10) / 86_400);
+  assert.equal(plan.plan.targetLedger, 8_740);
+  assert.match(
+    plan.plan.assumptions[0] ?? "",
+    /observed \(sampled ledgers 90-100, 10 intervals\)/,
+  );
+  assert.match(
+    formatReport(report, "table"),
+    /Ledger interval: 10s \(observed; sampled ledgers 90-100 \(10 intervals\)\)/,
   );
 });
 
@@ -178,6 +212,7 @@ test("states snapshot consistency limits only when several RPC requests were use
     [entry()],
     config,
     "Test SDF Network ; September 2015",
+    undefined,
     { requestCount: 1, oldestLedger: 100, latestLedger: 100 },
   );
   assert.ok(!single.limitations.some((line) => /separate/.test(line)));
@@ -188,6 +223,7 @@ test("states snapshot consistency limits only when several RPC requests were use
     [entry()],
     config,
     "Test SDF Network ; September 2015",
+    undefined,
     { requestCount: 3, oldestLedger: 101, latestLedger: 103 },
   );
   assert.ok(
