@@ -32,7 +32,9 @@ to automate contract changes.
   as conditions requiring investigation. Do not silently substitute an
   expiration value.
 - Review `networkPassphrase`, `latestLedger`, and the assumptions in each report.
-  Reports are snapshots and become stale as the ledger advances.
+  Reports are snapshots and become stale as the ledger advances. Inspections of
+  more than 200 keys use several RPC requests that may observe different
+  ledgers; the report's limitations list the observed ledger range.
 - Re-inspect immediately before acting on a plan. The dry-run cost estimate is
   only illustrative and must not be used as a transaction fee quote.
 

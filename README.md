@@ -9,7 +9,7 @@ A TypeScript SDK and CLI for inspecting **known** Soroban ledger keys, checking 
 
 A contract ID does not reveal every contract storage key. Supply the `LedgerKey` XDR values your application knows about (for example, from contract metadata or an indexer). The toolkit does not discover or protect unlisted keys.
 
-The MVP reads contract data and contract code entries, including the `liveUntilLedgerSeq` expiration metadata, from one Soroban RPC snapshot. It checks the RPC's network passphrase against the selected named network and verifies returned entry data re-encodes to the requested ledger key. It does not directly query TTL ledger keys: Soroban RPC rejects direct TTL-key requests. It does not construct, sign, or submit transactions. Any extension-cost estimate is explicitly illustrative; it does not replace transaction simulation or a network fee quote.
+The MVP reads contract data and contract code entries, including the `liveUntilLedgerSeq` expiration metadata, from Soroban RPC. Up to 200 keys are read in one `getLedgerEntries` request (a single ledger snapshot); larger inputs are split into requests of at most 200 keys, which Soroban RPC cannot pin to one ledger (see [Key limits and chunking](#key-limits-and-chunking)). It checks the RPC's network passphrase against the selected named network and verifies returned entry data re-encodes to the requested ledger key. It does not directly query TTL ledger keys: Soroban RPC rejects direct TTL-key requests. It does not construct, sign, or submit transactions. Any extension-cost estimate is explicitly illustrative; it does not replace transaction simulation or a network fee quote.
 
 ## Requirements and setup
 
@@ -49,7 +49,7 @@ For reviewable key inventories, use a versioned JSON manifest:
 }
 ```
 
-Run either command with `--manifest ./storage-keys.json` in place of `--key` or `--keys-file`. A manifest may contain up to 200 unique names and keys; it does not discover keys or imply complete contract-storage coverage. Manifest metadata is included with its matching entry in reports.
+Run either command with `--manifest ./storage-keys.json` in place of `--key` or `--keys-file`. A manifest may contain up to 1,000 unique names and keys; it does not discover keys or imply complete contract-storage coverage. Manifest metadata is included with its matching entry in reports.
 
 ## CLI
 
@@ -80,7 +80,17 @@ For custom endpoints, set `networkPassphrase` in the config or pass `--network-p
 
 For RPC providers requiring bearer authentication, set `STELLAR_RPC_AUTH_TOKEN` in the environment. The token is sent in the Authorization header and is never included in the report. Avoid putting credentials in endpoint URLs or committed config files.
 
-The CLI accepts up to 200 unique contract data/code keys per call. Reports include the verified network passphrase, snapshot ledger, ledger-time assumption, entry modification ledger, TTL expiration ledger when supplied by RPC, estimated remaining ledgers/days, risk, and the known-key limitation. Output formats are `table`, `json`, and `csv`. CSV text cells beginning with spreadsheet formula markers (`=`, `+`, `-`, or `@`, including after leading whitespace/control characters) are prefixed with an apostrophe to reduce formula-injection risk; numeric report values remain numeric.
+The CLI accepts up to 1,000 unique contract data/code keys per call (see [Key limits and chunking](#key-limits-and-chunking)). Reports include the verified network passphrase, snapshot ledger, ledger-time assumption, entry modification ledger, TTL expiration ledger when supplied by RPC, estimated remaining ledgers/days, risk, and the known-key limitation. Output formats are `table`, `json`, and `csv`. CSV text cells beginning with spreadsheet formula markers (`=`, `+`, `-`, or `@`, including after leading whitespace/control characters) are prefixed with an apostrophe to reduce formula-injection risk; numeric report values remain numeric.
+
+## Key limits and chunking
+
+- At most **1,000** unique keys per inspection (`MAX_INSPECT_KEYS`). Larger inputs are rejected before any RPC call.
+- Keys are sent in sequential `getLedgerEntries` requests of at most **200** keys (`MAX_KEYS_PER_RPC_REQUEST`, the Soroban RPC per-request limit). Each request body is also capped at 1 MB. SDK users can lower the chunk size for providers with stricter limits: `new SorobanRpcClient(config, fetch, { maxKeysPerRequest: 50 })`.
+- Each response is checked only against the keys sent in that request. Malformed, duplicate, or unrequested entries fail the whole inspection.
+- If any request fails, the inspection fails and no report is produced; there are no partial reports. Errors name the failed request (for example `getLedgerEntries request 2 of 5 failed: ...`).
+- Entries keep the order the keys were supplied in, regardless of response order.
+
+**Snapshot consistency.** Soroban RPC cannot pin separate requests to one ledger. When more than one request is needed, entries may come from different ledgers. The report's `latestLedger` is the highest ledger seen across requests, so remaining TTL is measured conservatively, and the report adds a limitation naming the request count and observed ledger range. The SDK exposes the same data as `RpcSnapshot.consistency` (`requestCount`, `oldestLedger`, `latestLedger`). Inspect 200 or fewer keys when you need a single-ledger snapshot.
 
 ## Extension-cost estimate
 

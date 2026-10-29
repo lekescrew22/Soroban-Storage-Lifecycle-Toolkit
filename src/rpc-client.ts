@@ -7,7 +7,13 @@ import type { ToolkitConfig } from "./config.js";
 import { xdr } from "@stellar/stellar-sdk";
 import { errorMessage, ToolkitError } from "./errors.js";
 
-const MAX_STORAGE_KEYS = 200;
+/** Maximum number of keys one `inspect` call accepts across all RPC requests. */
+export const MAX_INSPECT_KEYS = 1_000;
+/**
+ * Maximum number of keys sent in one `getLedgerEntries` request. This matches
+ * the Soroban RPC per-request limit; larger inputs are split into chunks.
+ */
+export const MAX_KEYS_PER_RPC_REQUEST = 200;
 const MAX_REQUEST_BYTES = 1_000_000;
 const MAX_ENTRY_XDR_BYTES = 10 * 1024 * 1024;
 const MAX_RPC_RESPONSE_BYTES = 25 * 1024 * 1024;
@@ -47,10 +53,29 @@ export interface InspectedEntry {
   entryBytes: number | null;
 }
 
+/**
+ * Describes how the entries were read. Soroban RPC cannot pin several
+ * `getLedgerEntries` requests to one ledger, so when more than one request is
+ * needed the entries may come from different ledgers between
+ * `oldestLedger` and `latestLedger`.
+ */
+export interface SnapshotConsistency {
+  requestCount: number;
+  oldestLedger: number;
+  latestLedger: number;
+}
+
 export interface RpcSnapshot {
   networkPassphrase: string;
+  /** Highest ledger observed across all requests. */
   latestLedger: number;
   entries: InspectedEntry[];
+  consistency: SnapshotConsistency;
+}
+
+export interface SorobanRpcClientOptions {
+  /** Keys per `getLedgerEntries` request, from 1 to MAX_KEYS_PER_RPC_REQUEST. */
+  maxKeysPerRequest?: number;
 }
 
 export function requireLiveUntilLedgerSeq(
@@ -88,10 +113,26 @@ function canonicalLedgerKey(value: unknown): string {
 }
 
 export class SorobanRpcClient {
+  private readonly maxKeysPerRequest: number;
+
   constructor(
     private readonly config: ToolkitConfig,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+    options: SorobanRpcClientOptions = {},
+  ) {
+    const chunkSize = options.maxKeysPerRequest ?? MAX_KEYS_PER_RPC_REQUEST;
+    if (
+      !Number.isSafeInteger(chunkSize) ||
+      chunkSize < 1 ||
+      chunkSize > MAX_KEYS_PER_RPC_REQUEST
+    ) {
+      throw new ToolkitError(
+        "CONFIGURATION",
+        `maxKeysPerRequest must be an integer from 1 to ${MAX_KEYS_PER_RPC_REQUEST}`,
+      );
+    }
+    this.maxKeysPerRequest = chunkSize;
+  }
 
   async inspect(keys: string[]): Promise<RpcSnapshot> {
     try {
@@ -113,24 +154,13 @@ export class SorobanRpcClient {
         "Provide at least one ledger key",
       );
     }
-    if (keys.length > MAX_STORAGE_KEYS) {
+    if (keys.length > MAX_INSPECT_KEYS) {
       throw new ToolkitError(
         "INVALID_INPUT",
-        `At most ${MAX_STORAGE_KEYS} storage keys can be inspected per request`,
+        `At most ${MAX_INSPECT_KEYS} storage keys can be inspected per call`,
       );
     }
     const parsedKeys = keys.map(parseStorageKey);
-    const requestBytes = parsedKeys.reduce(
-      (total, parsed) => total + Buffer.byteLength(parsed.xdr, "utf8"),
-      0,
-    );
-    if (requestBytes > MAX_REQUEST_BYTES) {
-      throw new ToolkitError(
-        "INVALID_INPUT",
-        "Combined ledger key request exceeds the 1 MB safety limit",
-      );
-    }
-    const requested = new Set<string>();
     const uniqueStorageKeys = new Set<string>();
     for (const parsed of parsedKeys) {
       if (uniqueStorageKeys.has(parsed.xdr)) {
@@ -140,22 +170,69 @@ export class SorobanRpcClient {
         );
       }
       uniqueStorageKeys.add(parsed.xdr);
-      requested.add(parsed.xdr);
+    }
+    const chunks: string[][] = [];
+    for (let i = 0; i < parsedKeys.length; i += this.maxKeysPerRequest) {
+      const chunk = parsedKeys
+        .slice(i, i + this.maxKeysPerRequest)
+        .map((parsed) => parsed.xdr);
+      const requestBytes = chunk.reduce(
+        (total, key) => total + Buffer.byteLength(key, "utf8"),
+        0,
+      );
+      if (requestBytes > MAX_REQUEST_BYTES) {
+        throw new ToolkitError(
+          "INVALID_INPUT",
+          "Combined ledger key request exceeds the 1 MB safety limit",
+        );
+      }
+      chunks.push(chunk);
     }
 
     const networkPassphrase = await this.verifyNetwork();
-    const snapshot = await this.getLedgerEntries([...requested]);
-    for (const returnedKey of snapshot.entries.keys()) {
-      if (!requested.has(returnedKey)) {
+    // Requests run one at a time so a failure stops further requests and no
+    // partial result is returned.
+    const found = new Map<string, RpcLedgerEntry>();
+    let oldestLedger = Number.POSITIVE_INFINITY;
+    let latestLedger = 0;
+    for (const [index, chunk] of chunks.entries()) {
+      let snapshot: RpcLedgerSnapshot;
+      try {
+        snapshot = await this.getLedgerEntries(chunk);
+        const requested = new Set(chunk);
+        for (const returnedKey of snapshot.entries.keys()) {
+          if (!requested.has(returnedKey)) {
+            throw new ToolkitError(
+              "RPC_RESPONSE",
+              "RPC returned a ledger entry that was not requested",
+            );
+          }
+        }
+      } catch (error) {
+        if (chunks.length === 1) {
+          throw error;
+        }
+        const prefix = `getLedgerEntries request ${index + 1} of ${chunks.length} failed`;
+        if (error instanceof ToolkitError) {
+          throw new ToolkitError(error.code, `${prefix}: ${error.message}`, {
+            cause: error,
+          });
+        }
         throw new ToolkitError(
           "RPC_RESPONSE",
-          "RPC returned a ledger entry that was not requested",
+          `${prefix}: ${errorMessage(error)}`,
+          { cause: error },
         );
       }
+      for (const [key, entry] of snapshot.entries) {
+        found.set(key, entry);
+      }
+      oldestLedger = Math.min(oldestLedger, snapshot.latestLedger);
+      latestLedger = Math.max(latestLedger, snapshot.latestLedger);
     }
 
     const entries = parsedKeys.map((parsed): InspectedEntry => {
-      const storage = snapshot.entries.get(parsed.xdr);
+      const storage = found.get(parsed.xdr);
       if (storage) {
         const storageEntry = decodeLedgerEntryData(storage.xdr);
         const actualKey = ledgerKeyFromEntryData(storageEntry);
@@ -178,7 +255,16 @@ export class SorobanRpcClient {
       };
     });
 
-    return { networkPassphrase, latestLedger: snapshot.latestLedger, entries };
+    return {
+      networkPassphrase,
+      latestLedger,
+      entries,
+      consistency: {
+        requestCount: chunks.length,
+        oldestLedger,
+        latestLedger,
+      },
+    };
   }
 
   private async verifyNetwork(): Promise<string> {

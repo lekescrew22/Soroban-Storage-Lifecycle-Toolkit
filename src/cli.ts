@@ -9,7 +9,7 @@ import {
   createInspectionReport,
   createMaintenancePlan,
 } from "./maintenance-planner.js";
-import { SorobanRpcClient } from "./rpc-client.js";
+import { MAX_INSPECT_KEYS, SorobanRpcClient } from "./rpc-client.js";
 import { formatReport, type OutputFormat } from "./report.js";
 import {
   parseStorageKeyManifest,
@@ -127,8 +127,10 @@ async function loadKeys(
       "Provide one or more --key values, a --keys-file, or a --manifest",
     );
   }
-  if (keys.length > 200) {
-    throw new Error("Provide at most 200 ledger keys per command");
+  if (keys.length > MAX_INSPECT_KEYS) {
+    throw new Error(
+      `Provide at most ${MAX_INSPECT_KEYS} ledger keys per command`,
+    );
   }
   return { keys, metadata: new Map() };
 }
@@ -208,7 +210,7 @@ async function run(
 ): Promise<void> {
   const config = await resolveConfig(configOverrides(globalOptions));
   const { keys, metadata } = await loadKeys(options);
-  const { networkPassphrase, latestLedger, entries } =
+  const { networkPassphrase, latestLedger, entries, consistency } =
     await new SorobanRpcClient(config).inspect(keys);
   const labeledEntries = entries.map((entry) => ({
     ...entry,
@@ -220,6 +222,7 @@ async function run(
     labeledEntries,
     config,
     networkPassphrase,
+    consistency,
   );
   const result =
     kind === "plan"

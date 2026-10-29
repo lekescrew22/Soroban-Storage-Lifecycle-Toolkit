@@ -379,3 +379,264 @@ test("does not echo RPC URL query credentials in transport errors", async () => 
     },
   );
 });
+
+function indexedCodeKey(index: number): { key: string; value: string } {
+  const hash = Buffer.alloc(32, 0xab);
+  hash.writeUInt32BE(index, 0);
+  return {
+    key: xdr.LedgerKey.contractCode(
+      new xdr.LedgerKeyContractCode({ hash }),
+    ).toXDR("base64"),
+    value: xdr.LedgerEntryData.contractCode(
+      new xdr.ContractCodeEntry({
+        ext: xdr.ContractCodeEntryExt.v0(),
+        hash,
+        code: Buffer.from([index & 0xff]),
+      }),
+    ).toXDR("base64"),
+  };
+}
+
+function chunkedStub(
+  values: Map<string, string>,
+  options: {
+    ledgerForRequest?: (requestIndex: number) => number;
+    respond?: (
+      requestIndex: number,
+      keys: string[],
+    ) => Response | Promise<Response> | undefined;
+  } = {},
+): { fetch: typeof fetch; requests: string[][] } {
+  const requests: string[][] = [];
+  const fetchStub = rpcStub(async (request) => {
+    const keys = request.params.keys ?? [];
+    const requestIndex = requests.length;
+    requests.push(keys);
+    const override = await options.respond?.(requestIndex, keys);
+    if (override) {
+      return override;
+    }
+    const latestLedger = options.ledgerForRequest?.(requestIndex) ?? 100;
+    // Return entries in reverse order to prove output follows input order.
+    const entries = [...keys].reverse().flatMap((key) => {
+      const value = values.get(key);
+      return value
+        ? [
+            {
+              key,
+              xdr: value,
+              lastModifiedLedgerSeq: 90,
+              liveUntilLedgerSeq: 1_000,
+            },
+          ]
+        : [];
+    });
+    return Response.json({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: { latestLedger, entries },
+    });
+  });
+  return { fetch: fetchStub, requests };
+}
+
+test("splits inputs at the per-request limit and keeps input order", async () => {
+  for (const [count, expectedSizes] of [
+    [200, [200]],
+    [201, [200, 1]],
+    [400, [200, 200]],
+    [1_000, [200, 200, 200, 200, 200]],
+  ] as const) {
+    const generated = Array.from({ length: count }, (_, i) =>
+      indexedCodeKey(i),
+    );
+    // Shuffle so ordering is not accidentally sorted.
+    const keys = generated.map((item) => item.key).reverse();
+    const values = new Map(generated.map((item) => [item.key, item.value]));
+    const stub = chunkedStub(values);
+
+    const result = await new SorobanRpcClient(config, stub.fetch).inspect(keys);
+    assert.deepEqual(
+      stub.requests.map((chunk) => chunk.length),
+      expectedSizes,
+    );
+    assert.deepEqual(stub.requests.flat(), keys);
+    assert.deepEqual(
+      result.entries.map((entry) => entry.key),
+      keys,
+    );
+    assert.ok(result.entries.every((entry) => entry.found));
+    assert.equal(result.consistency.requestCount, expectedSizes.length);
+  }
+});
+
+test("honors a smaller configured chunk size and validates its bounds", async () => {
+  const generated = Array.from({ length: 7 }, (_, i) => indexedCodeKey(i));
+  const keys = generated.map((item) => item.key);
+  // Only some keys exist; missing keys must stay in place as not found.
+  const values = new Map(
+    generated.filter((_, i) => i % 2 === 0).map((i) => [i.key, i.value]),
+  );
+  const stub = chunkedStub(values);
+  const result = await new SorobanRpcClient(config, stub.fetch, {
+    maxKeysPerRequest: 3,
+  }).inspect(keys);
+  assert.deepEqual(
+    stub.requests.map((chunk) => chunk.length),
+    [3, 3, 1],
+  );
+  assert.deepEqual(
+    result.entries.map((entry) => [entry.key, entry.found]),
+    keys.map((key, i) => [key, i % 2 === 0]),
+  );
+
+  for (const maxKeysPerRequest of [0, 201, 1.5]) {
+    assert.throws(
+      () => new SorobanRpcClient(config, stub.fetch, { maxKeysPerRequest }),
+      (error) =>
+        error instanceof ToolkitError && error.code === "CONFIGURATION",
+    );
+  }
+});
+
+test("rejects more than the documented total key limit before any RPC call", async () => {
+  const keys = Array.from({ length: 1_001 }, (_, i) => indexedCodeKey(i).key);
+  const stub = chunkedStub(new Map());
+  await assert.rejects(
+    new SorobanRpcClient(config, stub.fetch).inspect(keys),
+    (error) =>
+      error instanceof ToolkitError &&
+      error.code === "INVALID_INPUT" &&
+      /At most 1000/.test(error.message),
+  );
+  assert.equal(stub.requests.length, 0);
+});
+
+test("fails the whole inspection when a middle chunk fails", async () => {
+  const generated = Array.from({ length: 5 }, (_, i) => indexedCodeKey(i));
+  const keys = generated.map((item) => item.key);
+  const values = new Map(generated.map((item) => [item.key, item.value]));
+
+  const rpcErrorStub = chunkedStub(values, {
+    respond: (requestIndex) =>
+      requestIndex === 1
+        ? Response.json({
+            jsonrpc: "2.0",
+            id: 1,
+            error: { code: -32600, message: "boom" },
+          })
+        : undefined,
+  });
+  await assert.rejects(
+    new SorobanRpcClient(config, rpcErrorStub.fetch, {
+      maxKeysPerRequest: 2,
+    }).inspect(keys),
+    (error) =>
+      error instanceof ToolkitError &&
+      error.code === "RPC_ERROR" &&
+      /request 2 of 3 failed: Soroban RPC error: boom/.test(error.message),
+  );
+  // The failing request stops the run; later chunks are never requested.
+  assert.equal(rpcErrorStub.requests.length, 2);
+
+  const malformedStub = chunkedStub(values, {
+    respond: (requestIndex) =>
+      requestIndex === 1
+        ? Response.json({ jsonrpc: "2.0", id: 1, result: { entries: [] } })
+        : undefined,
+  });
+  await assert.rejects(
+    new SorobanRpcClient(config, malformedStub.fetch, {
+      maxKeysPerRequest: 2,
+    }).inspect(keys),
+    (error) =>
+      error instanceof ToolkitError &&
+      error.code === "RPC_RESPONSE" &&
+      /request 2 of 3 failed: .*invalid getLedgerEntries response/.test(
+        error.message,
+      ),
+  );
+});
+
+test("rejects entries that belong to a different chunk or repeat within a chunk", async () => {
+  const generated = Array.from({ length: 4 }, (_, i) => indexedCodeKey(i));
+  const keys = generated.map((item) => item.key);
+  const values = new Map(generated.map((item) => [item.key, item.value]));
+  const entryFor = (index: number) => ({
+    key: generated[index]!.key,
+    xdr: generated[index]!.value,
+    lastModifiedLedgerSeq: 90,
+    liveUntilLedgerSeq: 1_000,
+  });
+
+  // Second chunk (keys 2 and 3) also returns key 0, which was requested only
+  // in the first chunk.
+  const crossChunk = chunkedStub(values, {
+    respond: (requestIndex) =>
+      requestIndex === 1
+        ? Response.json({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              latestLedger: 100,
+              entries: [entryFor(2), entryFor(0)],
+            },
+          })
+        : undefined,
+  });
+  await assert.rejects(
+    new SorobanRpcClient(config, crossChunk.fetch, {
+      maxKeysPerRequest: 2,
+    }).inspect(keys),
+    /request 2 of 2 failed: RPC returned a ledger entry that was not requested/,
+  );
+
+  const duplicate = chunkedStub(values, {
+    respond: (requestIndex) =>
+      requestIndex === 1
+        ? Response.json({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              latestLedger: 100,
+              entries: [entryFor(2), entryFor(2)],
+            },
+          })
+        : undefined,
+  });
+  await assert.rejects(
+    new SorobanRpcClient(config, duplicate.fetch, {
+      maxKeysPerRequest: 2,
+    }).inspect(keys),
+    /request 2 of 2 failed: RPC returned a duplicate ledger entry/,
+  );
+});
+
+test("reports the ledger range observed across chunks", async () => {
+  const generated = Array.from({ length: 3 }, (_, i) => indexedCodeKey(i));
+  const keys = generated.map((item) => item.key);
+  const values = new Map(generated.map((item) => [item.key, item.value]));
+  const ledgers = [101, 103, 102];
+  const stub = chunkedStub(values, {
+    ledgerForRequest: (requestIndex) => ledgers[requestIndex]!,
+  });
+  const result = await new SorobanRpcClient(config, stub.fetch, {
+    maxKeysPerRequest: 1,
+  }).inspect(keys);
+  assert.equal(result.latestLedger, 103);
+  assert.deepEqual(result.consistency, {
+    requestCount: 3,
+    oldestLedger: 101,
+    latestLedger: 103,
+  });
+
+  const single = await new SorobanRpcClient(
+    config,
+    chunkedStub(values).fetch,
+  ).inspect(keys);
+  assert.deepEqual(single.consistency, {
+    requestCount: 1,
+    oldestLedger: 100,
+    latestLedger: 100,
+  });
+});

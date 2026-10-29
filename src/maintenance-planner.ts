@@ -1,5 +1,5 @@
 import type { ToolkitConfig } from "./config.js";
-import type { InspectedEntry } from "./rpc-client.js";
+import type { InspectedEntry, SnapshotConsistency } from "./rpc-client.js";
 import { assessRisk, type RiskLevel } from "./risk.js";
 
 export interface InspectionReport {
@@ -44,6 +44,7 @@ export function createInspectionReport(
   entries: InspectedEntry[],
   config: ToolkitConfig,
   networkPassphrase: string,
+  consistency?: SnapshotConsistency,
 ): InspectionReport {
   assessRisk(null, latestLedger, config);
   if (!network || !networkPassphrase) {
@@ -78,6 +79,11 @@ export function createInspectionReport(
       "Expiration is taken from the liveUntilLedgerSeq metadata returned with each ledger entry.",
       "Temporary entries can be extended by any party; TTL must not be used as an application-level authorization, safety, or guaranteed-expiration mechanism.",
       "This toolkit does not construct, sign, or submit extension transactions.",
+      ...(consistency && consistency.requestCount > 1
+        ? [
+            `Entries were read with ${consistency.requestCount} separate getLedgerEntries requests because Soroban RPC limits keys per request and cannot pin requests to one ledger; entries may reflect ledgers ${consistency.oldestLedger} through ${consistency.latestLedger}, and remaining TTL is measured from ledger ${latestLedger}.`,
+          ]
+        : []),
       ...(config.network === "custom" &&
       config.expectedNetworkPassphrase === undefined
         ? [
