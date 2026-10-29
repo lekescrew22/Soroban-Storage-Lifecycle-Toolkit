@@ -74,23 +74,13 @@ node dist/cli.js --network custom --rpc-url https://rpc.example.org \
   --critical-days 7 --warning-days 30 inspect --key '<BASE64_LEDGER_KEY_XDR>'
 ```
 
-You can also use `--config config.json`, `STELLAR_NETWORK`, and `STELLAR_RPC_URL`. CLI options override config-file values, which override environment/default values. See [`config.example.json`](config.example.json). Risk defaults are 7 critical days and 30 warning days; the default ledger interval is five seconds and can be changed with `ledgerCloseSeconds`.
+You can also use `--config config.json`, `STELLAR_NETWORK`, and `STELLAR_RPC_URL`. CLI options override config-file values, which override environment/default values. See [`config.example.json`](config.example.json). Risk defaults are 7 critical days and 30 warning days. The toolkit samples the latest 10 ledger intervals from the RPC `getLedgers` close-time metadata and uses that observed cadence only when the 11-ledger window is complete, strictly increasing, and every interval is at most 60 seconds. If history or timestamps are unavailable or invalid, `ledgerCloseSeconds` (five seconds by default) is used as an explicit fallback. Reports and plans include the cadence source, sampling window, and fallback reason when applicable.
 
 For custom endpoints, set `networkPassphrase` in the config or pass `--network-passphrase` to pin the expected Stellar network passphrase. Named networks are checked against their canonical passphrases automatically.
 
 For RPC providers requiring bearer authentication, set `STELLAR_RPC_AUTH_TOKEN` in the environment. The token is sent in the Authorization header and is never included in the report. Avoid putting credentials in endpoint URLs or committed config files.
 
-The CLI accepts up to 1,000 unique contract data/code keys per call (see [Key limits and chunking](#key-limits-and-chunking)). Reports include the verified network passphrase, snapshot ledger, ledger-time assumption, entry modification ledger, TTL expiration ledger when supplied by RPC, estimated remaining ledgers/days, risk, and the known-key limitation. Output formats are `table`, `json`, and `csv`. CSV text cells beginning with spreadsheet formula markers (`=`, `+`, `-`, or `@`, including after leading whitespace/control characters) are prefixed with an apostrophe to reduce formula-injection risk; numeric report values remain numeric.
-
-## Key limits and chunking
-
-- At most **1,000** unique keys per inspection (`MAX_INSPECT_KEYS`). Larger inputs are rejected before any RPC call.
-- Keys are sent in sequential `getLedgerEntries` requests of at most **200** keys (`MAX_KEYS_PER_RPC_REQUEST`, the Soroban RPC per-request limit). Each request body is also capped at 1 MB. SDK users can lower the chunk size for providers with stricter limits: `new SorobanRpcClient(config, fetch, { maxKeysPerRequest: 50 })`.
-- Each response is checked only against the keys sent in that request. Malformed, duplicate, or unrequested entries fail the whole inspection.
-- If any request fails, the inspection fails and no report is produced; there are no partial reports. Errors name the failed request (for example `getLedgerEntries request 2 of 5 failed: ...`).
-- Entries keep the order the keys were supplied in, regardless of response order.
-
-**Snapshot consistency.** Soroban RPC cannot pin separate requests to one ledger. When more than one request is needed, entries may come from different ledgers. The report's `latestLedger` is the highest ledger seen across requests, so remaining TTL is measured conservatively, and the report adds a limitation naming the request count and observed ledger range. The SDK exposes the same data as `RpcSnapshot.consistency` (`requestCount`, `oldestLedger`, `latestLedger`). Inspect 200 or fewer keys when you need a single-ledger snapshot.
+The CLI accepts up to 200 unique contract data/code keys per call. Reports include the verified network passphrase, snapshot ledger, ledger-time assumption and its source/sampling window, entry modification ledger, TTL expiration ledger when supplied by RPC, estimated remaining ledgers/days, risk, and the known-key limitation. Output formats are `table`, `json`, and `csv`. CSV text cells beginning with spreadsheet formula markers (`=`, `+`, `-`, or `@`, including after leading whitespace/control characters) are prefixed with an apostrophe to reduce formula-injection risk; numeric report values remain numeric.
 
 ## Extension-cost estimate
 
@@ -104,7 +94,7 @@ This is a user-supplied planning approximation, not the protocol's authoritative
 
 ## JSON report schema
 
-The versioned [JSON Schema for report version 1](schemas/report-v1.schema.json) describes both inspection reports and dry-run plans. JSON consumers should check `schemaVersion` before processing reports. Additive optional entry metadata may be introduced without changing the schema version; changes to required fields, field meaning, or enum values require a new schema version. `remainingDays` is an estimate based on `ledgerCloseSeconds`; `estimatedCostStroops` and `estimatedTotalStroops` are optional illustrative estimates, not quotes.
+The versioned [JSON Schema for report version 1](schemas/report-v1.schema.json) describes both inspection reports and dry-run plans. JSON consumers should check `schemaVersion` before processing reports. Additive optional metadata may be introduced without changing the schema version; changes to required fields, field meaning, or enum values require a new schema version. `remainingDays` and plan target ledgers use the reported effective ledger interval; `estimatedCostStroops` and `estimatedTotalStroops` are optional illustrative estimates, not quotes.
 
 ## SDK
 
@@ -124,13 +114,25 @@ const report = createInspectionReport(
   snapshot.entries,
   config,
   snapshot.networkPassphrase,
+  snapshot.ledgerCloseInterval,
 );
 const plan = createMaintenancePlan(report, config, 30);
 ```
 
 The SDK validates the LedgerKey XDR and supports only TTL-managed Soroban contract data/code keys. It derives the related TTL key for inclusion in reports, but obtains expiration from the `liveUntilLedgerSeq` metadata on the storage entry response rather than querying TTL keys directly. If an RPC provider omits that metadata, expiration and risk are reported as unknown rather than inferred. Named networks are checked by passphrase; custom endpoints report their returned passphrase without asserting its identity.
 
-SDK failures use the exported `ToolkitError` class and stable `code` values (`INVALID_INPUT`, `CONFIGURATION`, `NETWORK_MISMATCH`, `RPC_TRANSPORT`, `RPC_HTTP`, `RPC_ERROR`, and `RPC_RESPONSE`). Missing expiration metadata remains a successful inspection with a `null` ledger and `unknown` risk; strict callers can use `requireLiveUntilLedgerSeq(entry)`, which raises `TTL_METADATA_UNAVAILABLE`. Typed errors preserve the underlying cause where available; avoid logging causes if your application treats transport details as sensitive.
+SDK failures use the exported `ToolkitError` class and stable `code` values (`INVALID_INPUT`, `CONFIGURATION`, `NETWORK_MISMATCH`, `ABORTED`, `RPC_TRANSPORT`, `RPC_HTTP`, `RPC_ERROR`, and `RPC_RESPONSE`). Missing expiration metadata remains a successful inspection with a `null` ledger and `unknown` risk; strict callers can use `requireLiveUntilLedgerSeq(entry)`, which raises `TTL_METADATA_UNAVAILABLE`. Typed errors preserve the underlying cause where available; avoid logging causes if your application treats transport details as sensitive.
+
+An inspection can be cancelled by passing an `AbortSignal` in its options. Cancellation stops active RPC fetches and retry waits, and rejects with a `ToolkitError` whose code is `ABORTED`:
+
+```ts
+const controller = new AbortController();
+const inspection = new SorobanRpcClient(config).inspect([ledgerKeyXdr], {
+  signal: controller.signal,
+});
+controller.abort();
+await inspection;
+```
 
 ## Development
 
